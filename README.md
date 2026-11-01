@@ -14,8 +14,6 @@
   <img src="https://img.shields.io/badge/Lizenz-Apache%202.0-green" alt="Lizenz">
 </p>
 
-![Screenshot](assets/screenshot.png)
-
 ## Was macht das Programm?
 
 Rohteilcalc liest eine STEP-Datei (`*.step`, `*.stp`) ein, richtet das Bauteil
@@ -98,8 +96,7 @@ cargo build --release
 ├── assets/
 │   ├── logo.png                 # Logo (Quelle für die App-Icons)
 │   ├── icon.ico                 # Windows-Icon (in der .exe eingebettet)
-│   ├── icon.icns                # macOS-App-Icon
-│   └── screenshot.png
+│   └── icon.icns                # macOS-App-Icon
 ├── build.rs                     # bettet das Icon unter Windows ein
 ├── src/main.rs                  # App, STEP-Loader, Rasterizer, UI
 └── Cargo.toml
