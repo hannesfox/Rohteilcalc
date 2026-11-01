@@ -1,0 +1,16 @@
+[package]
+name = "rohteil_calc"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+winres = "0.1"
+
+[dependencies]
+eframe = "0.27"
+egui = "0.27"
+glam = "0.27"
+rfd = "0.14" # Nativer Dateidialog zum Laden von STEP-Dateien
+# STEP einlesen und B-rep-Flächen triangulieren
+truck-stepio = "0.3"
+truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
