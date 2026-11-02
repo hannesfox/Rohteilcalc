@@ -4,13 +4,33 @@ version = "0.1.0"
 edition = "2021"
 
 [build-dependencies]
-winres = "0.1"
+winres = "0.1" # Windows-Icon aus assets/icon.ico einbetten
 
 [dependencies]
-eframe = "0.27"
+# wgpu-Backend für den GPU-Viewport (MSAA, Tiefenpuffer, Shading)
+eframe = { version = "0.27", default-features = false, features = ["wgpu", "default_fonts"] }
 egui = "0.27"
+egui-wgpu = "0.27"
+wgpu = "0.19"
+bytemuck = { version = "1", features = ["derive"] }
 glam = "0.27"
 rfd = "0.14" # Nativer Dateidialog zum Laden von STEP-Dateien
+pollster = "0.3" # Headless-GPU-Rendering (--render)
+
 # STEP einlesen und B-rep-Flächen triangulieren
 truck-stepio = "0.3"
 truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
+
+[dev-dependencies]
+# Für die Debug-Beispiele (probe.rs)
+ruststep = "0.4.0"
+
+# objc2/icrate 0.4 (über winit 0.29) prüft Objective-C-Typencodes nur mit
+# debug_assertions. Auf aktuellen macOS-Versionen schlägt diese Prüfung bei
+# NSScreen fälschlich fehl und beendet die App beim Start. Für die
+# Abhängigkeiten abschalten – der eigentliche Aufruf ist unverändert korrekt.
+[profile.dev.package.objc2]
+debug-assertions = false
+
+[profile.dev.package.icrate]
+debug-assertions = false

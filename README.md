@@ -26,11 +26,39 @@ gegenüber.
 - **STEP-Import** inkl. B-rep-Triangulierung (`truck-stepio` / `truck-meshalgo`)
 - **Automatische Ausrichtung**: längste Kante → X, mittlere → Y, kürzeste → Z
 - **Rohteilberechnung** nach festen Fertigungsregeln
-- **3D-Viewport** mit Software-Z-Buffer: keine durchscheinenden Rückseiten,
-  weiche Schattierung gekrümmter Flächen, harte Kanten bleiben scharf
+- **GPU-Viewport (wgpu)**: MSAA 4×, Tiefenpuffer, Blinn-Phong-Beleuchtung und
+  dicke CAD-Kanten – weiche Rundungen, scharfe Bauteilkanten
+- **Darstellungsmodi**: Schattiert, Schattiert + Kanten, Drahtgitter
+- **Kamera**: Orbit, Pan, Zoom, Einpassen sowie Vorne/Hinten/Links/Rechts/
+  Oben/Unten/Iso
+- **Qualitätsstufen**: Niedrig (0,40 mm), Mittel (0,05 mm) und Hoch (0,015 mm)
+  Tessellierungs-Toleranz – umschaltbar ohne erneutes Laden der Datei
+- **Asynchrones Laden**: STEP-Parsing und Tessellierung laufen im Hintergrund,
+  die Oberfläche bleibt bedienbar
 - **Bedienung**: STEP über Button laden, per **Drag & Drop** ins Fenster ziehen,
   Kamera mit linker Maustaste drehen, mit dem Mausrad zoomen
 - **Fertige Builds**: Windows `.exe` und macOS `.app` (Universal: Apple Silicon + Intel)
+
+## Bedienung
+
+| Aktion | Steuerung |
+|--------|-----------|
+| Drehen | Linke Maustaste ziehen |
+| Verschieben | Rechte oder mittlere Maustaste bzw. Shift + ziehen |
+| Zoomen | Mausrad |
+| Einpassen | Doppelklick oder Taste `F` |
+| Ansichten | Vorne `1`, Oben `2`, Rechts `3`, Iso `4` |
+| STEP laden | Button „STEP-Datei öffnen…“ oder Datei ins Fenster ziehen |
+
+## Kommandozeile
+
+```bash
+# Geometrie prüfen (Körper, Dreiecke, Bauteil- und Rohteilmaße)
+cargo run -- --inspect bauteil.step
+
+# Headless rendern: <datei> <ausgabe.bmp> [yaw pitch zoom] [shaded|edges|wire]
+cargo run -- --render bauteil.step ansicht.bmp -0.72 0.42 1.0 edges
+```
 
 ## Rohteilregeln
 
@@ -98,18 +126,34 @@ cargo build --release
 │   ├── icon.ico                 # Windows-Icon (in der .exe eingebettet)
 │   └── icon.icns                # macOS-App-Icon
 ├── build.rs                     # bettet das Icon unter Windows ein
-├── src/main.rs                  # App, STEP-Loader, Rasterizer, UI
+├── src/
+│   ├── main.rs                  # Einstieg: GUI, CLI, BMP-Export
+│   ├── step.rs                  # STEP-Import (B-Rep bleibt erhalten) + Tessellierung
+│   ├── mesh.rs                  # Anzeigenetz, Normalen, Feature-Kanten
+│   ├── stock.rs                 # Ausrichtung und Rohteilregeln
+│   ├── camera.rs                # Orbit-Kamera und Standardansichten
+│   ├── renderer.rs              # wgpu-Renderer (Pipelines, MSAA, Kanten, Rohteil)
+│   └── app.rs                   # egui-Oberfläche, asynchrones Laden
+├── examples/probe.rs            # Debug: roher ruststep-Parsefehler
 └── Cargo.toml
 ```
 
 ## Technischer Hintergrund
 
-- **STEP-Parsing:** `truck-stepio`, Triangulierung mit robuster Toleranz (0,05 mm)
-- **Rendering:** eigener Software-Rasterizer mit Z-Buffer in eine egui-Textur.
-  egui selbst besitzt keinen Tiefenpuffer; ohne ihn würden Rückseiten (z. B.
-  Bohrungswände) über die Vorderseite gezeichnet.
-- **Schattierung:** Flächennormale mit Glättung über Kanten < 40°, dadurch
-  weiche Zylinder-/Kegelflächen bei scharfen Bauteilkanten.
+- **STEP-Parsing:** `truck-stepio` / `truck-meshalgo`. Die B-Rep-Daten bleiben
+  als Dokument erhalten; das Dreiecksnetz ist reine Anzeigegeometrie und wird
+  bei Qualitätswechsel neu erzeugt.
+- **Rendering:** wgpu über einen `egui_wgpu`-Paint-Callback. Die Szene wird mit
+  4× MSAA und Tiefenpuffer in ein Offscreen-Ziel gerendert und anschließend in
+  den egui-Pass kopiert (egui selbst besitzt keinen Tiefenpuffer).
+- **Schattierung:** Blinn-Phong mit Himmelslicht, Key-Light, Specular und
+  Silhouettenabdunklung. Flächennormalen werden nur über Kanten < 40° geglättet,
+  dadurch weiche Zylinder-/Kegelflächen bei scharfen Bauteilkanten.
+- **Kanten:** Feature-Kanten ab 40° Flächenwinkel, als instanzierte
+  Screen-Space-Quads gezeichnet (wgpu unterstützt nur 1-px-Linien).
+- **Robustheit:** Latin-1-Fallback für ältere Exporte, Reparatur leerer
+  Parameterlisten, Einheiten-Umrechnung nach mm; nicht triangulierbare Flächen
+  werden als Warnung gemeldet statt still ignoriert.
 
 ## Lizenz
 

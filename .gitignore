@@ -31,3 +31,13 @@ dist/
 
 # Build-Artefakte
 Rohteilcalc-*.zip
+
+# Lokale Screenshots
+Bildschirmfoto*.png
+
+# Lokale CAD-Testmodelle (nicht im Repo)
+*.step
+*.stp
+*.Step
+*.SteP
+*.STEP
