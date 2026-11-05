@@ -17,22 +17,24 @@ rfd = "0.14" # Nativer Dateidialog zum Laden von STEP-Dateien
 pollster = "0.4" # Headless-GPU-Rendering (--render)
 
 # SolidCraft: STEP-Import (engine), Szene (render) und Viewport-Pipelines
-# (gpu) genau wie im SolidCraft-Viewport. Path-Dependencies in den
-# heruntergeladenen Workspace (MIT OR Apache-2.0).
-solidcraft-geom = { path = "/Users/hannes/Downloads/solidcraft-main/crates/geom" }
-solidcraft-engine = { path = "/Users/hannes/Downloads/solidcraft-main/crates/engine" }
-solidcraft-render = { path = "/Users/hannes/Downloads/solidcraft-main/crates/render" }
-solidcraft-gpu = { path = "/Users/hannes/Downloads/solidcraft-main/crates/gpu" }
+# (gpu) genau wie im SolidCraft-Viewport. Git-Abhängigkeiten auf das
+# öffentliche SolidCraft-Repo (MIT OR Apache-2.0), gepinnt auf das Tag,
+# das die lokale Entwicklungslinie ist (0.40.0-rc.2) — für builds,
+# die auf jeder Maschine (auch CI) funktionieren.
+solidcraft-geom = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.2" }
+solidcraft-engine = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.2" }
+solidcraft-render = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.2" }
+solidcraft-gpu = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.2" }
 # Datentypen (Vec3) der B-rep-Records — dieselbe Revision, die SolidCraft
-# selbst pinnt, damit die Typen zu den Path-Crates passen.
+# selbst pinnt, damit die Typen zu den Git-Crates passen.
 solidcore-record = { git = "https://github.com/tangency-labs/solidcore", rev = "f5e8e9a29e0c9b7cf6c4040a5bc8878382b3c62f" }
 serde_json = "1"
 
 # 3D-Maus (SpaceMouse): HID-Report-Auslesen (descriptor/layout) und der
 # Client der 3Dconnexion-Drivers (macOS, 3DxWare) — dieselben Crates wie in
 # SolidCraft. hidapi liest das Gerät selbst.
-solidcraft-space-mouse = { path = "/Users/hannes/Downloads/solidcraft-main/crates/space-mouse" }
-solidcraft-3dx-client = { path = "/Users/hannes/Downloads/solidcraft-main/crates/threedx-client" }
+solidcraft-space-mouse = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.2" }
+solidcraft-3dx-client = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.2" }
 hidapi = { version = "2.6.7", default-features = false, features = ["macos-shared-device"] }
 
 # Legacy-Pipeline (truck/Analytik-Mesher, für tests/t2_new.rs): wird von der

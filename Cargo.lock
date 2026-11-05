@@ -3579,11 +3579,13 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-3dx-client"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 
 [[package]]
 name = "solidcraft-derive"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3592,7 +3594,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-doc"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "log",
  "serde",
@@ -3611,7 +3614,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-engine"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "image",
  "log",
@@ -3634,7 +3638,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-geom"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "serde",
  "solidcore-record",
@@ -3643,7 +3648,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-gpu"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "log",
  "pollster 0.4.0",
@@ -3658,7 +3664,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-io"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "cadmpeg-core",
  "cadmpeg-ir",
@@ -3684,7 +3691,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-kernel"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "log",
  "rayon",
@@ -3702,7 +3710,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-profile"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "serde_json",
  "web-time",
@@ -3710,7 +3719,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-render"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "image",
  "moxcms",
@@ -3725,7 +3735,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-sketch"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "harfrust",
  "serde",
@@ -3738,7 +3749,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-smlib"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "log",
  "serde_json",
@@ -3750,11 +3762,13 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-space-mouse"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 
 [[package]]
 name = "solidcraft-step"
-version = "0.40.0-rc.1"
+version = "0.40.0-rc.2"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
 dependencies = [
  "solidcore-record",
  "solidcraft-geom",
