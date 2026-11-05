@@ -542,7 +542,7 @@ pub fn tessellate_face(
     if let Ok(path) = std::env::var("MESHER_UVDUMP") {
         use std::io::Write;
         let want = std::env::var("MESHER_UVDUMP_TAG").ok();
-        let tag_ok = want.as_deref().map_or(true, |w| tag == w);
+        let tag_ok = want.as_deref().is_none_or(|w| tag == w);
         if tag_ok {
             if let Ok(mut f) = std::fs::File::create(&path) {
             let _ = writeln!(f, "# loops_uv (skaliert), loops3d, vertices, triangles");
@@ -558,7 +558,7 @@ pub fn tessellate_face(
             }
             let _ = writeln!(f, "mesh");
             for (v, p) in vertices.iter().enumerate() {
-                let uv = map.params(*p).map_or((f64::NAN, f64::NAN), |(u, w)| (u, w));
+                let uv = map.params(*p).unwrap_or((f64::NAN, f64::NAN));
                 let _ = writeln!(f, "v {} {} {} {} {} {}", v, p.x, p.y, p.z, uv.0, uv.1);
             }
                 for t in &triangles {
@@ -635,6 +635,7 @@ fn orient2d(
 fn loops_uv_simple(loops_uv: &[Vec<spade::Point2<f64>>]) -> Result<(), String> {
     // Segmente als (a, b) sammeln; Schleifen-/Segmentindex und Schleifenlänge
     // merken, um echte Nachbarsegmente zu erkennen.
+    #[allow(clippy::type_complexity)] // Datenklammer, keine API
     let mut segs: Vec<(usize, usize, usize, [f64; 2], [f64; 2])> = Vec::new();
     for (li, uv_loop) in loops_uv.iter().enumerate() {
         let n = uv_loop.len();

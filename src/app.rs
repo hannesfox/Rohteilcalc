@@ -7,10 +7,9 @@ use crate::renderer::{
     render_camera,
 };
 use crate::step::Quality;
+use crate::shadow;
 use crate::space_mouse;
-use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke, Vec2};
-use solidcore_record::Vec3 as RcVec3;
-use solidcraft_geom::prelude::*;
+use eframe::egui::{self, Sense, Stroke};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
@@ -23,27 +22,37 @@ struct LoadOk {
     warnings: usize,
 }
 
-struct LoadMsg {
+pub(crate) struct LoadMsg {
     result: Result<LoadOk, String>,
     fit_camera: bool,
 }
 
 pub struct AppState {
-    camera: OrbitCamera,
-    mode: ViewMode,
-    show_stock: bool,
-    quality: Quality,
+    pub(crate) camera: OrbitCamera,
+    pub(crate) mode: ViewMode,
+    pub(crate) show_stock: bool,
+    pub(crate) quality: Quality,
     session: Option<ScSession>,
-    model: Option<Arc<ScModel>>,
+    pub(crate) model: Option<Arc<ScModel>>,
     gpustate: Option<SceneState>,
-    revision: u64,
-    file_path: Option<PathBuf>,
-    status: String,
-    status_is_error: bool,
-    loading: Option<Receiver<LoadMsg>>,
+    pub(crate) revision: u64,
+    pub(crate) file_path: Option<PathBuf>,
+    pub(crate) status: String,
+    pub(crate) status_is_error: bool,
+    pub(crate) loading: Option<Receiver<LoadMsg>>,
     /// 3D-Maus (SpaceMouse): Leser-Thread + geteilte Achsen; `None`, wenn
     /// kein Gerät gelesen werden kann oder die app noch nicht begonnen hat.
     spacemouse: Option<space_mouse::SpaceMouse>,
+    /// Schattenkontur: gewünschter Außenabstand (mm) und letzte Rechnung.
+    pub(crate) shadow_expand: f32,
+    pub(crate) shadow: Option<shadow::ShadowResult>,
+    /// Vorschau der Kontur im 3D-Fenster (cyanfarbene Linie).
+    pub(crate) shadow_preview: bool,
+    /// Einstellbare Aufmaße (Säge/Spanntiefe/Planfräs) — Steuerparameter.
+    pub(crate) allowances: crate::stock::StockParams,
+    /// Zuletzt gewählte Standardansicht (Hervorhebung im Overlay); None
+    /// nach freiem Orbit.
+    pub(crate) active_view: Option<StandardView>,
 }
 
 impl AppState {
@@ -62,6 +71,11 @@ impl AppState {
             status_is_error: false,
             loading: None,
             spacemouse: None,
+            shadow_expand: 3.0,
+            shadow: None,
+            shadow_preview: true,
+            allowances: crate::stock::StockParams::default(),
+            active_view: None,
         };
         // Pipelines wurden in main (renderer::install) angelegt; egal wer
         // zuerst — hier fehlt nur der scene upload.
@@ -72,15 +86,90 @@ impl AppState {
         app
     }
 
-    fn reset_camera(&mut self) {
+    pub(crate) fn reset_camera(&mut self) {
         if let Some(model) = &self.model {
             self.camera.fit(model.center, model.radius);
         }
     }
 
-    fn load_demo(&mut self) {
+    /// Kamera auf Ausgangszustand (Iso) und Einpassen.
+    pub(crate) fn camera_reset(&mut self) {
+        self.camera = OrbitCamera::default();
+        self.camera.set_standard_view(StandardView::Iso);
+        self.active_view = Some(StandardView::Iso);
+        self.reset_camera();
+    }
+
+    /// Szenen-Neu-Upload für die Kontur-Vorschau anstoßen (mit/ohne Linie).
+    pub(crate) fn refresh_preview(&mut self) {
+        self.revision += 1;
+        self.gpustate = None;
+    }
+
+    /// Schattenkontur (Projektion auf XY, nach außen vergrößert) erzeugen.
+    pub(crate) fn build_shadow(&mut self) {
+        let Some(model) = self.model.clone() else {
+            self.shadow = None;
+            self.status = "Schattenkontur: erst eine STEP-Datei laden.".to_string();
+            self.status_is_error = true;
+            return;
+        };
+        let expand = self.shadow_expand.max(0.0);
+        match shadow::build(&model, expand) {
+            Ok(result) => {
+                // Szenen-Neu-Upload anstoßen, so dass die Vorschau sofort
+                // erscheint (Viewport hängt an `revision`).
+                self.revision += 1;
+                self.gpustate = None;
+                self.status = format!(
+                    "Schattenkontur erzeugt: {} Punkte · Umfang {:.1} mm · Fläche {:.0} mm² · Abstand {:.1} mm (Auflösung {:.2} mm)",
+                    result.polygon.len(),
+                    result.perimeter,
+                    result.area,
+                    result.expand,
+                    result.res,
+                );
+                self.status_is_error = false;
+                self.shadow = Some(result);
+            }
+            Err(e) => {
+                self.shadow = None;
+                self.status = format!("Schattenkontur: {e}");
+                self.status_is_error = true;
+            }
+        }
+    }
+
+    /// Die fertige Schattenkontur als DXF (mm) speichern.
+    pub(crate) fn save_shadow_dxf(&mut self) {
+        let Some(shadow) = &self.shadow else { return };
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("DXF (Datenaustausch)", &["dxf"])
+            .set_file_name("schattenkontur.dxf")
+            .save_file()
+        else {
+            return;
+        };
+        match shadow::write_dxf(&path, &shadow.polygon) {
+            Ok(()) => {
+                self.status = format!(
+                    "DXF gespeichert: {} ({} Punkte, Abstand {:.1} mm)",
+                    path.display(),
+                    shadow.polygon.len(),
+                    shadow.expand,
+                );
+                self.status_is_error = false;
+            }
+            Err(e) => {
+                self.status = format!("DXF: {e}");
+                self.status_is_error = true;
+            }
+        }
+    }
+
+    pub(crate) fn load_demo(&mut self) {
         let mesh = generate_sample_milled_part(110.0, 42.0, 18.0);
-        match demo_scene(mesh, self.mode, self.show_stock) {
+        match demo_scene(mesh, self.mode, self.show_stock, &self.allowances) {
             Ok(model) => {
                 self.session = None;
                 self.file_path = None;
@@ -99,25 +188,35 @@ impl AppState {
     }
 
     fn set_model(&mut self, model: ScModel) {
+        // Alte Kontur nur behalten, wenn die Projektion unverändert ist
+        // (Tessellierung neu, gleiche Geometrie) — sonst verfällt sie.
+        let keep_shadow = self
+            .shadow
+            .as_ref()
+            .is_some_and(|s| s.same_footprint(&model.part_positions));
+        if !keep_shadow {
+            self.shadow = None;
+        }
         self.revision += 1;
         self.model = Some(Arc::new(model));
         self.gpustate = None; // Neu-Upload beim nächsten Bild
     }
 
     /// Lädt eine Datei im Hintergrund, damit die Oberfläche nicht blockiert.
-    fn start_load(&mut self, path: PathBuf, fit_camera: bool) {
+    pub(crate) fn start_load(&mut self, path: PathBuf, fit_camera: bool) {
         if self.loading.is_some() {
             return;
         }
         let quality = self.quality;
         let mode = self.mode;
         let show_stock = self.show_stock;
+        let allowances = self.allowances;
         let (tx, rx) = mpsc::channel();
         let path_clone = path.clone();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let session = ScSession::open(&path_clone, quality)?;
-                let model = session.model(mode, show_stock)?;
+                let model = session.model(mode, show_stock, allowances)?;
                 Ok(LoadOk {
                     session: Some(session),
                     model,
@@ -144,7 +243,7 @@ impl AppState {
     }
 
     /// Öffnet das bereits geladene Dokument mit einer neuen Qualität neu.
-    fn start_rettesellate(&mut self) {
+    pub(crate) fn start_rettesellate(&mut self) {
         let Some(path) = self.file_path.clone() else {
             return;
         };
@@ -205,181 +304,10 @@ impl AppState {
         }
     }
 
-    fn ui_panel(&mut self, ui: &mut egui::Ui) {
-        // Große, gut lesbare Schrift in der Steuerleiste (wie bisher).
-        for font_id in ui.style_mut().text_styles.values_mut() {
-            font_id.size *= 2.0;
-        }
-
-        ui.heading("📦 Rohteil-Kalkulation (CNC)");
-        ui.separator();
-
-        ui.horizontal(|ui| {
-            if ui.button("📂 STEP-Datei öffnen…").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("STEP CAD", &["step", "stp", "Step", "STP", "SteP"])
-                    .pick_file()
-                {
-                    self.start_load(path, true);
-                }
-            }
-            if ui.button("🧱 Demo").clicked() {
-                self.load_demo();
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.label("Qualität:");
-            let before = self.quality;
-            egui::ComboBox::from_id_salt("tess_quality")
-                .selected_text(self.quality.label())
-                .show_ui(ui, |ui| {
-                    for q in Quality::ALL {
-                        ui.selectable_value(&mut self.quality, q, q.label());
-                    }
-                });
-            if self.quality != before {
-                self.start_rettesellate();
-            }
-        });
-
-        let file_label = self
-            .file_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "Demo".to_string());
-        ui.label(format!("Datei: {file_label}"));
-
-        if !self.status.is_empty() {
-            let color = if self.status_is_error {
-                Color32::from_rgb(220, 90, 80)
-            } else if self.loading.is_some() {
-                Color32::from_rgb(210, 160, 60)
-            } else {
-                Color32::from_rgb(50, 130, 80)
-            };
-            ui.label(RichText::new(&self.status).color(color));
-        }
-        if self.loading.is_some() {
-            ui.add(egui::Spinner::new().size(16.0));
-        }
-
-        ui.separator();
-        ui.label(RichText::new("1. Bauteilmaße (ausgerichtet)").strong());
-        if let Some(model) = &self.model {
-            ui.label(format!("X (Länge):  {:.2} mm", model.part_size.x));
-            ui.label(format!("Y (Breite): {:.2} mm", model.part_size.y));
-            ui.label(format!("Z (Höhe):   {:.2} mm", model.part_size.z));
-
-            ui.add_space(8.0);
-            ui.label(
-                RichText::new("2. Berechnetes Rohteil")
-                    .strong()
-                    .color(Color32::from_rgb(180, 130, 20)),
-            );
-            ui.label(format!(
-                "X-Rohmaß: {:.2} mm (+5.0 mm Sägeaufmaß)",
-                model.stock_size.x
-            ));
-            ui.label(format!(
-                "Y-Rohmaß: {:.2} mm (Halbzeug-Staffel)",
-                model.stock_size.y
-            ));
-            ui.label(format!(
-                "Z-Rohmaß: {:.2} mm (10-mm-Stufen)",
-                model.stock_size.z
-            ));
-        }
-
-        ui.add_space(8.0);
-        ui.label(RichText::new("3. Z-Spannsituation").strong());
-        ui.label("• Schraubstock-Spanntiefe: 4.0 mm (unten)");
-        if let Some(model) = &self.model {
-            ui.label(format!(
-                "• Planfräs-Aufmaß:         {:.1} mm (oben)",
-                (model.stock_size.z - model.part_size.z - 4.0).max(1.0)
-            ));
-        }
-
-        ui.separator();
-        ui.label(RichText::new("Darstellung").strong());
-        ui.horizontal(|ui| {
-            ui.label("Modus:");
-            let before = self.mode;
-            egui::ComboBox::from_id_salt("view_mode")
-                .selected_text(self.mode.label())
-                .show_ui(ui, |ui| {
-                    for m in ViewMode::ALL {
-                        ui.selectable_value(&mut self.mode, m, m.label());
-                    }
-                });
-            if self.mode != before {
-                self.rebuild();
-            }
-        });
-        let before = self.show_stock;
-        ui.checkbox(&mut self.show_stock, "Rohteil-Box anzeigen");
-        if self.show_stock != before {
-            self.rebuild();
-        }
-
-        ui.add_space(6.0);
-        ui.label("Ansicht:");
-        ui.horizontal_wrapped(|ui| {
-            for view in StandardView::ALL {
-                if ui.small_button(view.label()).clicked() {
-                    self.camera.set_standard_view(view);
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Ansicht einpassen").clicked() {
-                self.camera.fit_view();
-            }
-            if ui.button("Kamera zurücksetzen").clicked() {
-                self.camera = OrbitCamera::default();
-                self.camera.set_standard_view(StandardView::Iso);
-                self.reset_camera();
-            }
-        });
-
-        if let Some(model) = self.model.clone() {
-            if model.bodies.len() > 1 {
-                ui.add_space(6.0);
-                ui.label("Körper:");
-                for body in &model.bodies {
-                    let mut visible = body.visible;
-                    let name = body.name.clone();
-                    if ui.checkbox(&mut visible, &name).changed() {
-                        self.set_body_visible(&name, visible);
-                    }
-                }
-            }
-        }
-
-        ui.separator();
-        ui.label(RichText::new("Steuerung Viewport").strong());
-        ui.label("• Linke Maustaste: Drehen");
-        ui.label("• Rechte Maustaste / Shift: Verschieben");
-        ui.label("• Mausrad: Zoomen");
-        ui.label("• Doppelklick: Einpassen");
-        ui.label("• STEP-Datei ins Fenster ziehen: Laden");
-
-        if let Some(model) = &self.model {
-            ui.add_space(4.0);
-            ui.label(format!("Kanten: {}", model.edge_count));
-            ui.label(format!(
-                "GPU-Modus: SolidCraft-Pipelines ({})",
-                model.triangle_count
-            ));
-        }
-    }
-
     /// Szene mit neuen Anzeigeeinstellungen synchron neu bauen.
-    fn rebuild(&mut self) {
+    pub(crate) fn rebuild(&mut self) {
         if let Some(session) = &self.session {
-            match session.model(self.mode, self.show_stock) {
+            match session.model(self.mode, self.show_stock, self.allowances) {
                 Ok(model) => self.set_model(model),
                 Err(e) => {
                     self.status = format!("Szene neu bauen: {e}");
@@ -393,16 +321,16 @@ impl AppState {
         }
     }
 
-    fn load_demo_preserve_camera(&mut self) {
+    pub(crate) fn load_demo_preserve_camera(&mut self) {
         let mesh = generate_sample_milled_part(110.0, 42.0, 18.0);
-        if let Ok(model) = demo_scene(mesh, self.mode, self.show_stock) {
+        if let Ok(model) = demo_scene(mesh, self.mode, self.show_stock, &self.allowances) {
             self.session = None;
             self.file_path = None;
             self.set_model(model);
         }
     }
 
-    fn set_body_visible(&mut self, name: &str, visible: bool) {
+    pub(crate) fn set_body_visible(&mut self, name: &str, visible: bool) {
         let Some(session) = &mut self.session else {
             return;
         };
@@ -412,7 +340,7 @@ impl AppState {
             return;
         }
         if let Some(session) = &self.session {
-            match session.model(self.mode, self.show_stock) {
+            match session.model(self.mode, self.show_stock, self.allowances) {
                 Ok(model) => self.set_model(model),
                 Err(e) => {
                     self.status = format!("Szene neu bauen: {e}");
@@ -442,6 +370,9 @@ impl AppState {
             // rechnet identisch exp(−1.5·Schub·seconds) — hier also nicht
             // noch einmal mit der Zeit multiplizieren.
             self.camera.zoom_factor((-f64::from(m.zoom) * 1.5).exp() as f32);
+            if m.orbit_x != 0.0 || m.orbit_y != 0.0 || m.roll != 0.0 {
+                self.active_view = None; // freie Fahrt — keine Standardansicht aktiv
+            }
             self.camera.orbit_on_screen(m.orbit_x, m.orbit_y);
             self.camera.roll_by(m.roll);
         }
@@ -450,6 +381,7 @@ impl AppState {
             if shift || pan_btn {
                 self.camera.pan(delta.x, delta.y, rect.height());
             } else {
+                self.active_view = None; // Freier Orbit — Auswahl entfällt
                 self.camera.orbit(delta.x, delta.y);
             }
         }
@@ -469,17 +401,25 @@ impl AppState {
                 egui::Align2::CENTER_CENTER,
                 "Keine Geometrie geladen",
                 egui::FontId::proportional(18.0),
-                Color32::GRAY,
+                crate::ui::theme::EMPTY_TEXT,
             );
             return;
         };
 
-        // GPU-Upload je Revision anlegen (Szene → GPU beim ersten Bild).
+        // GPU-Upload je Revision anlegen (Szene → GPU beim ersten Bild);
+        // mit Schattenkontur-Vorschau kommt die cyanfarbene Konturlinie mit.
         let revision = self.revision;
         let state = match &self.gpustate {
             Some(st) if st.key == revision => st,
             _ => {
-                let mut st = SceneState::new(&model.scene);
+                let mut st = match (&self.shadow, self.shadow_preview) {
+                    (Some(s), true) => SceneState::new(&crate::renderer::scene_with_shadow_contour(
+                        &model.scene,
+                        s,
+                        model.part_size.z + 0.25,
+                    )),
+                    _ => SceneState::new(&model.scene),
+                };
                 st.set_key(revision);
                 self.gpustate = Some(st);
                 self.gpustate.as_mut().unwrap()
@@ -500,32 +440,10 @@ impl AppState {
             ViewCallback(frame),
         ));
 
-        // Achsen-Gizmo (2D-Overlay): die Weltachsen auf die Basis der
-        // Renderkamera projiziert — inklusive Roll, so dass der Kompass
-        // exakt so zeigt wie die Ansicht (vorher Nachbau der Drehungen,
-        // in dem Z falsch herum ging und Y bei Pitch fast stand).
-        let (right, up, _back) = cam.basis();
-        let anchor = Pos2::new(rect.left() + 54.0, rect.bottom() - 54.0);
-        for (axis, color, label) in [
-            (RcVec3::new(1.0, 0.0, 0.0), Color32::from_rgb(220, 70, 70), "X"),
-            (RcVec3::new(0.0, 1.0, 0.0), Color32::from_rgb(60, 170, 90), "Y"),
-            (RcVec3::new(0.0, 0.0, 1.0), Color32::from_rgb(80, 130, 240), "Z"),
-        ] {
-            // Bildschirm x zeigt nach rechts (egui-y nach unten), die Welt-
-            // skizze nach oben; Streuung in die Tiefe (back) bleibt unberücksichtigt.
-            let end = anchor + Vec2::new(axis.dot(right) as f32, -(axis.dot(up) as f32)) * 36.0;
-            ui.painter()
-                .line_segment([anchor, end], Stroke::new(2.0_f32, color));
-            ui.painter().text(
-                end + Vec2::new(4.0, -4.0),
-                egui::Align2::LEFT_BOTTOM,
-                label,
-                egui::FontId::monospace(12.0),
-                color,
-            );
-        }
-        ui.painter()
-            .circle_filled(anchor, 2.5, Color32::from_gray(140));
+        // Overlays: Ansichten-Leiste oben rechts, Legende und Kompass unten
+        // links (der Kompass projiziert die Weltachsen auf die Renderkamera-
+        // Basis — inklusive Roll, so dass er exakt so zeigt wie die Ansicht).
+        crate::ui::viewport_overlay::show(self, ui, &cam);
 
         // Drag-&-Drop-Overlay
         let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
@@ -534,12 +452,12 @@ impl AppState {
             painter.rect_filled(
                 rect,
                 0.0,
-                Color32::from_rgba_unmultiplied(20, 30, 45, 180),
+                crate::ui::theme::DND_FILL,
             );
             painter.rect_stroke(
                 rect.shrink(12.0),
                 10.0,
-                Stroke::new(2.5_f32, Color32::from_rgb(120, 200, 255)),
+                Stroke::new(2.5_f32, crate::ui::theme::DND_STROKE),
                 egui::StrokeKind::Outside,
             );
             painter.text(
@@ -547,7 +465,7 @@ impl AppState {
                 egui::Align2::CENTER_CENTER,
                 "STEP-Datei hier ablegen",
                 egui::FontId::proportional(26.0),
-                Color32::from_rgb(220, 240, 255),
+                crate::ui::theme::DND_TEXT,
             );
         }
     }
@@ -566,43 +484,60 @@ impl eframe::App for AppState {
             i.raw
                 .dropped_files
                 .iter()
-                .find_map(|file| Some(file.path().to_path_buf()))
+                .map(|file| file.path().to_path_buf())
+                .next()
         });
         if let Some(path) = dropped {
             self.start_load(path, true);
         }
 
-        // Tastaturkürzel (wie in CAD-Programmen)
+        // Tastaturkürzel (wie in CAD-Programmen) — auch die Hervorhebung im
+        // Ansichten-Overlay folgt mit.
         ctx.input(|i| {
             if i.key_pressed(egui::Key::F) {
                 self.camera.fit_view();
+                self.active_view = None;
             }
             if i.key_pressed(egui::Key::Num1) {
                 self.camera.set_standard_view(StandardView::Front);
+                self.active_view = Some(StandardView::Front);
             }
             if i.key_pressed(egui::Key::Num2) {
                 self.camera.set_standard_view(StandardView::Top);
+                self.active_view = Some(StandardView::Top);
             }
             if i.key_pressed(egui::Key::Num3) {
                 self.camera.set_standard_view(StandardView::Right);
+                self.active_view = Some(StandardView::Right);
             }
             if i.key_pressed(egui::Key::Num4) {
                 self.camera.set_standard_view(StandardView::Iso);
+                self.active_view = Some(StandardView::Iso);
             }
         });
 
-        egui::Panel::left("control_panel")
-            .min_size(360.0)
+        // Linke Leiste: dunkles Theme, feste Standardbreite (320 px,
+        // min 280, max 420), Inhalt scrollbar, Fußleiste fix unten.
+        egui::Panel::left("sidebar")
+            .default_size(crate::ui::theme::SIDEBAR_DEFAULT)
+            .min_size(crate::ui::theme::SIDEBAR_MIN)
+            .max_size(crate::ui::theme::SIDEBAR_MAX)
             .resizable(true)
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::ui::theme::BG)
+                    .inner_margin(egui::Margin::same(8)),
+            )
             .show(ui, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| self.ui_panel(ui));
+                egui::ScrollArea::vertical()
+                    .id_salt("sidebar_scroll")
+                    .show(ui, |ui| crate::ui::sidebar::content(self, ui));
+                ui.add_space(4.0);
+                crate::ui::sidebar::footer(self, ui);
             });
 
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::default()
-                    .fill(Color32::from_rgb(210, 216, 226)),
-            )
+            .frame(egui::Frame::default().fill(crate::ui::theme::VIEWPORT_BG))
             .show(ui, |ui| self.viewport(ui));
     }
 }

@@ -26,7 +26,7 @@ use solidcore_record::Vec3 as RcVec3;
 use glam::Vec3;
 use crate::camera::OrbitCamera;
 use crate::mesh::MeshData;
-use crate::stock::StockResult;
+use crate::stock::{StockParams, StockResult};
 
 // ---------------------------------------------------------
 // Anzeigemodi
@@ -50,7 +50,7 @@ impl ViewMode {
         }
     }
 
-    pub const ALL: [ViewMode; 3] = [ViewMode::ShadedEdges, ViewMode::Shaded, ViewMode::Wire];
+    pub const ALL: [ViewMode; 3] = [ViewMode::Shaded, ViewMode::ShadedEdges, ViewMode::Wire];
 }
 
 // ---------------------------------------------------------
@@ -72,9 +72,21 @@ pub struct ScModel {
     /// Bauteilmaße in ausgerichteten Koordinaten.
     pub part_size: Vec3,
     pub stock_size: Vec3,
+    /// Schraubstock-Spanntiefe in Z (aus dem Kalkulationspfad).
+    pub clamp_mm: f32,
+    /// Planfräs-Aufmaß oben in Z (Plattensprung nach der Rundung).
+    pub top_allow_mm: f32,
+    /// Bauteilvolumen (mm³) — für das Materialverhältnis der UI.
+    /// Signed-Tetra-Summe der Bauteildreiecke; 0.0, wenn unbestimmbar.
+    pub volume_mm3: f64,
     pub triangle_count: usize,
     pub edge_count: usize,
     pub bodies: Vec<ScBodyInfo>,
+    /// Die reinen Bauteil-Netze (ausgerichtet, mm) ohne Rohteil-Box und
+    /// Bodenraster — Datenbasis für die Schattenkontur. Dreiecke sind
+    /// über alle Netze durchnummeriert.
+    pub part_positions: Vec<[f32; 3]>,
+    pub part_triangles: Vec<[u32; 3]>,
 }
 
 // ---------------------------------------------------------
@@ -124,8 +136,13 @@ impl ScSession {
 
     /// Anzeigemodell bauen: dieselbe Szenenzusammensetzung wie in
     /// `solidcraft-engine::view` (Körper in Farben, Kanten, Hintergrund),
-    /// danach Rohteil-Ausrichtung und Rohteil-Box.
-    pub fn model(&self, mode: ViewMode, show_stock: bool) -> Result<ScModel, String> {
+    /// danach Rohteil-Ausrichtung und Rohteil-Box (mit deren Aufmaßen).
+    pub fn model(
+        &self,
+        mode: ViewMode,
+        show_stock: bool,
+        stock_params: StockParams,
+    ) -> Result<ScModel, String> {
         let s = &self.session;
         let st = s.world_state().map_err(|e| e.to_string())?;
         let p = Palette::DEFAULT;
@@ -198,7 +215,7 @@ impl ScSession {
             scene.lines.extend(lines);
             bodies.push(ScBodyInfo { name: body.name.clone(), visible });
         }
-        build_view(scene, mode, show_stock, bodies)
+        build_view(scene, mode, show_stock, bodies, &stock_params)
     }
 }
 
@@ -216,12 +233,13 @@ fn to8_color(c: Option<[f32; 3]>) -> Option<solidcraft_render::Rgb> {
 
 /// Ausgerichtete Szene fertig bauen: Netzkoordinaten rigide auf die
 /// Rohteil-Ausrichtung drehen (längste Achse X, unten Z = 0), Rohteilmaße
-/// nach den Fertigungsregeln, Rohteil-Box und Bodenraster, Kennzahlen.
+/// mit den vorgegebenen Aufmaßen, Rohteil-Box und Bodenraster, Kennzahlen.
 pub fn build_view(
     mut scene: solidcraft_render::Scene,
     _mode: ViewMode,
     show_stock: bool,
     bodies: Vec<ScBodyInfo>,
+    stock_params: &StockParams,
 ) -> Result<ScModel, String> {
     // Alle Positions-Vertices der Szene (Datei-Koordinaten) sammeln.
     let all: Vec<Vec3> = scene
@@ -235,6 +253,45 @@ pub fn build_view(
     };
 
     apply_align(&mut scene, &align);
+
+    // Die Bauteil-Netze für die Schattenkontur festhalten, bevor die
+    // Hilfsgeometrie (Rohteil-Box, Bodenraster) dazukommt: Dreiecke über
+    // alle Netze durchnummeriert.
+    let mut part_positions: Vec<[f32; 3]> = Vec::new();
+    let mut part_triangles: Vec<[u32; 3]> = Vec::new();
+    let mut base: u32 = 0;
+    for m in &scene.meshes {
+        let start = part_positions.len() as u32;
+        for p in &m.mesh.positions {
+            part_positions.push([p.x as f32, p.y as f32, p.z as f32]);
+        }
+        for t in &m.mesh.triangles {
+            part_triangles.push([t[0] + start, t[1] + start, t[2] + start]);
+        }
+        base = part_positions.len() as u32;
+    }
+    let _ = base;
+
+    // Bauteilvolumen (Signed-Tetra-Summe) — für das Materialverhältnis.
+    let volume_mm3: f64 = part_triangles
+        .iter()
+        .map(|t| {
+            let [ax, ay, az] = part_positions[t[0] as usize];
+            let [bx, by, bz] = part_positions[t[1] as usize];
+            let [cx, cy, cz] = part_positions[t[2] as usize];
+            let (a, b, c) = (
+                [f64::from(ax), f64::from(ay), f64::from(az)],
+                [f64::from(bx), f64::from(by), f64::from(bz)],
+                [f64::from(cx), f64::from(cy), f64::from(cz)],
+            );
+            // det[a b c] / 6 = a · (b × c) / 6
+            (a[0] * (b[1] * c[2] - b[2] * c[1])
+                + a[1] * (b[2] * c[0] - b[0] * c[2])
+                + a[2] * (b[0] * c[1] - b[1] * c[0]))
+                / 6.0
+        })
+        .sum::<f64>()
+        .abs();
 
     // Ausgerichtete Boundingbox der Netze.
     let mut bb_min = Vec3::splat(f32::MAX);
@@ -255,7 +312,7 @@ pub fn build_view(
     let radius = (ext.length() * 0.5).max(1.0);
     let triangle_count: usize = scene.meshes.iter().map(|m| m.mesh.triangles.len()).sum();
 
-    let stock = StockResult::from_part_size(part_size);
+    let stock = StockResult::from_part_size_with_params(part_size, *stock_params);
     // Rohteil-Box: X/Y zentriert ums Bauteil, unten ins Spannmaß.
     let size = stock.stock_size;
     let bmin = Vec3::new(
@@ -279,9 +336,14 @@ pub fn build_view(
         radius,
         part_size,
         stock_size: stock.stock_size,
+        clamp_mm: stock.clamp_depth_z,
+        top_allow_mm: stock.top_allowance_z,
+        volume_mm3,
         triangle_count,
         edge_count,
         bodies,
+        part_positions,
+        part_triangles,
     })
 }
 
@@ -315,6 +377,84 @@ fn apply_align(scene: &mut solidcraft_render::Scene, align: &crate::stock::Align
 const STOCK_FILL: solidcraft_render::Rgb = solidcraft_render::Rgb(255, 199, 69);
 const STOCK_CLAMP: solidcraft_render::Rgb = solidcraft_render::Rgb(229, 89, 89);
 
+/// Die Schattenkontur als cyanfarbene Linie über der Szene (Vorschau).
+/// Die Basis-Szene wird unverändert übernommen (Netze/Arc-Freiheiten bleiben
+/// geteilt), nur die Linienliste zieht die Konterlinie als geschlossene,
+/// zeichnungsober liegende Polylinie auf `z` ein.
+pub fn scene_with_shadow_contour(
+    base: &solidcraft_render::Scene,
+    shadow: &crate::shadow::ShadowResult,
+    z: f32,
+) -> solidcraft_render::Scene {
+    let rc = |p: [f32; 2]| {
+        RcVec3::new(
+            f64::from(shadow.origin[0] + p[0]),
+            f64::from(shadow.origin[1] + p[1]),
+            f64::from(z),
+        )
+    };
+    let mut contour: Vec<RcVec3> = shadow.polygon.iter().map(|p| rc(*p)).collect();
+    if let Some(first) = contour.first().copied() {
+        contour.push(first); // geschlossen zeichnen
+    }
+    let preview_line = solidcraft_render::SceneLine {
+        points: contour,
+        color: solidcraft_render::Rgb(
+            crate::ui::theme::PREVIEW.r(),
+            crate::ui::theme::PREVIEW.g(),
+            crate::ui::theme::PREVIEW.b(),
+        ),
+        alpha: 1.0,
+        width: 2.5,
+        on_top: true,
+    };
+    let mut lines: Vec<solidcraft_render::SceneLine> = base
+        .lines
+        .iter()
+        .map(|l| solidcraft_render::SceneLine {
+            points: l.points.clone(),
+            color: l.color,
+            alpha: l.alpha,
+            width: l.width,
+            on_top: l.on_top,
+        })
+        .collect();
+    lines.push(preview_line);
+    solidcraft_render::Scene {
+        meshes: base
+            .meshes
+            .iter()
+            .map(|m| SceneMesh {
+                mesh: Arc::clone(&m.mesh),
+                color: m.color,
+                face_colors: m.face_colors.clone(),
+                opacity: m.opacity,
+                closed: m.closed,
+                hatch: m.hatch,
+            })
+            .collect(),
+        lines,
+        grid: base
+            .grid
+            .iter()
+            .map(|l| solidcraft_render::SceneLine {
+                points: l.points.clone(),
+                color: l.color,
+                alpha: l.alpha,
+                width: l.width,
+                on_top: l.on_top,
+            })
+            .collect(),
+        background: base.background,
+        radius: base.radius,
+        clip: base.clip,
+        cap: base.cap,
+        plain_cap: base.plain_cap,
+        part_hatch: base.part_hatch,
+        analysis: base.analysis,
+    }
+}
+
 /// Rohteil-Box als glasiger Körper plus obere Kontur und Spannlinie.
 fn add_stock_box(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3, clamp_z: f32) {
     let rc = |v: Vec3| RcVec3::new(v.x as f64, v.y as f64, v.z as f64);
@@ -332,8 +472,7 @@ fn add_stock_box(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3, c
         [Vec3::new(bmax.x, bmin.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmax.z), Vec3::new(bmax.x, bmin.y, bmax.z)],
     ];
     let mut mesh = solidcraft_geom::Mesh::default();
-    let mut tri: u32 = 0;
-    for q in &quads {
+    for (tri, q) in (0_u32..).zip(quads.iter()) {
         let a = rc(q[0]);
         let b = rc(q[1]);
         let c = rc(q[2]);
@@ -347,7 +486,6 @@ fn add_stock_box(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3, c
         mesh.triangles.push([base, base + 1, base + 2]);
         mesh.triangles.push([base, base + 2, base + 3]);
         mesh.tri_face.extend([tri; 2]);
-        tri += 1;
     }
     scene.meshes.push(SceneMesh {
         mesh: Arc::new(mesh),
@@ -441,6 +579,7 @@ pub fn demo_scene(
     mesh: MeshData,
     mode: ViewMode,
     show_stock: bool,
+    stock_params: &StockParams,
 ) -> Result<ScModel, String> {
     let p = Palette::DEFAULT;
     let mut scene = solidcraft_render::Scene {
@@ -483,18 +622,20 @@ pub fn demo_scene(
         closed: true,
         hatch: solidcraft_render::hatch::Hatch(0),
     });
-    build_view(scene, mode, show_stock, Vec::new())
+    build_view(scene, mode, show_stock, Vec::new(), stock_params)
 }
 
 /// Rohteilnetz (MeshData, pro-Eck-Normalen) in SolidCrafts Mesh-Typ mit
 /// vertexindizierten, weich gemittelten Normalen überführen.
 fn mesh_data_to_mesh(m: &MeshData) -> solidcraft_geom::Mesh {
-    let mut out = solidcraft_geom::Mesh::default();
-    out.positions = m
-        .vertices
-        .iter()
-        .map(|v| RcVec3::new(v.x as f64, v.y as f64, v.z as f64))
-        .collect();
+    let mut out = solidcraft_geom::Mesh {
+        positions: m
+            .vertices
+            .iter()
+            .map(|v| RcVec3::new(v.x as f64, v.y as f64, v.z as f64))
+            .collect(),
+        ..solidcraft_geom::Mesh::default()
+    };
     out.triangles = m
         .triangles
         .iter()
@@ -509,7 +650,7 @@ fn mesh_data_to_mesh(m: &MeshData) -> solidcraft_geom::Mesh {
         let n = (b - a).cross(c - a);
         for idx in t {
             if let Some(s) = sums.get_mut(*idx as usize) {
-                *s = *s + n;
+                *s += n;
             }
         }
     }

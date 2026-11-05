@@ -302,7 +302,7 @@ fn widen_revolved_line(
             high = high.min(apex);
         }
     }
-    if !(low < high) {
+    if low.partial_cmp(&high) != Some(std::cmp::Ordering::Less) {
         return;
     }
 

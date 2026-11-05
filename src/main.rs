@@ -14,10 +14,12 @@ mod mesh;
 #[allow(dead_code)]
 mod mesher;
 mod renderer;
+mod shadow;
 mod space_mouse;
 #[allow(dead_code)]
 mod step;
 mod stock;
+mod ui;
 
 use app::AppState;
 use camera::OrbitCamera;
@@ -278,7 +280,8 @@ struct InspectOut {
 
 fn inspect_cli(path: &Path) -> Result<InspectOut, String> {
     let session = ScSession::open(path, crate::step::Quality::Medium)?;
-    let model = session.model(ViewMode::ShadedEdges, false)?;
+    let model =
+        session.model(ViewMode::ShadedEdges, false, stock::StockParams::default())?;
     Ok(InspectOut {
         bodies: model.bodies.len(),
         triangles: model.triangle_count,
@@ -296,7 +299,7 @@ fn render_cli(
     mode: ViewMode,
 ) -> Result<(), String> {
     let session = ScSession::open(path, crate::step::Quality::High)?;
-    let model = session.model(mode, false)?;
+    let model = session.model(mode, false, stock::StockParams::default())?;
     let mut camera = OrbitCamera::default();
     camera.fit(model.center, model.radius);
     camera.yaw = yaw;

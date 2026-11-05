@@ -52,22 +52,51 @@ impl Alignment {
     }
 }
 
-impl StockResult {
-    /// Fertigungsregeln direkt aus den Bauteilmaßen (SolidCraft-Szenen-Pfad:
-    /// Ausrichtung passiert beim Kamera-/Szenen-Aufbau, die Maße braucht die
-    /// Rohteil-Rechnung trotzdem).
-    pub fn from_part_size(part: Vec3) -> Self {
-        if part == Vec3::ZERO {
-            return StockResult::default();
+#[derive(Clone, Copy, Debug)]
+pub struct StockParams {
+    /// Sägeaufmaß auf X — Standard 5.0 mm.
+    pub saw_x_mm: f32,
+    /// Schraubstock-Spanntiefe unten in Z — Standard 4.0 mm.
+    pub clamp_z_mm: f32,
+    /// Planfräs-Aufmaß oben in Z — Standard 1.0 mm.
+    pub plan_top_mm: f32,
+}
+
+impl Default for StockParams {
+    fn default() -> Self {
+        Self {
+            saw_x_mm: 5.0,
+            clamp_z_mm: 4.0,
+            plan_top_mm: 1.0,
         }
-        let stock_x = part.x + 5.0;
+    }
+}
+
+impl StockResult {
+    /// Fertigungsregeln direkt aus den Bauteilmaßen (Standardeinstellungen;
+    /// bleibt für Diagnose/Werkzeuge mit Legacy-Regeln erhalten).
+    #[allow(dead_code)]
+    pub fn from_part_size(part: Vec3) -> Self {
+        Self::from_part_size_with_params(part, StockParams::default())
+    }
+
+    /// Dasselbe mit einstellbaren Aufmaßen (UI): Sägeaufmaß, Spanntiefe,
+    /// Planfräs-Aufmaß; Y-Staffel und 10-mm-Plattenstufen bleiben Regeln.
+    pub fn from_part_size_with_params(part: Vec3, p: StockParams) -> Self {
+        if part == Vec3::ZERO {
+            return Self::default();
+        }
+        // X: Bauteillänge + Sägeaufmaß
+        let stock_x = part.x + p.saw_x_mm;
+        // Y: Halbzeug-Staffel (Regel)
         let stock_y = calculate_standard_y_stock(part.y);
-        let stock_z = calculate_standard_z_stock(part.z);
-        let top_allowance_z = stock_z - part.z - 4.0;
+        // Z: Rohteilplatte in 10-mm-Stufen über Spanntiefe + Planaufmaß
+        let stock_z = ((part.z + p.clamp_z_mm + p.plan_top_mm) / 10.0).ceil() * 10.0;
+        let top_allowance_z = stock_z - part.z - p.clamp_z_mm;
         StockResult {
             part_size: part,
             stock_size: Vec3::new(stock_x, stock_y, stock_z),
-            clamp_depth_z: 4.0,
+            clamp_depth_z: p.clamp_z_mm,
             top_allowance_z,
             transform: Mat3::IDENTITY,
         }
