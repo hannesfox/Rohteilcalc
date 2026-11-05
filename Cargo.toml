@@ -7,30 +7,41 @@ edition = "2021"
 winres = "0.1" # Windows-Icon aus assets/icon.ico einbetten
 
 [dependencies]
-# wgpu-Backend für den GPU-Viewport (MSAA, Tiefenpuffer, Shading)
-eframe = { version = "0.27", default-features = false, features = ["wgpu", "default_fonts"] }
-egui = "0.27"
-egui-wgpu = "0.27"
-wgpu = "0.19"
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal"] }
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.27"
 rfd = "0.14" # Nativer Dateidialog zum Laden von STEP-Dateien
-pollster = "0.3" # Headless-GPU-Rendering (--render)
+pollster = "0.4" # Headless-GPU-Rendering (--render)
 
-# STEP einlesen und B-rep-Flächen triangulieren
+# SolidCraft: STEP-Import (engine), Szene (render) und Viewport-Pipelines
+# (gpu) genau wie im SolidCraft-Viewport. Path-Dependencies in den
+# heruntergeladenen Workspace (MIT OR Apache-2.0).
+solidcraft-geom = { path = "/Users/hannes/Downloads/solidcraft-main/crates/geom" }
+solidcraft-engine = { path = "/Users/hannes/Downloads/solidcraft-main/crates/engine" }
+solidcraft-render = { path = "/Users/hannes/Downloads/solidcraft-main/crates/render" }
+solidcraft-gpu = { path = "/Users/hannes/Downloads/solidcraft-main/crates/gpu" }
+# Datentypen (Vec3) der B-rep-Records — dieselbe Revision, die SolidCraft
+# selbst pinnt, damit die Typen zu den Path-Crates passen.
+solidcore-record = { git = "https://github.com/tangency-labs/solidcore", rev = "f5e8e9a29e0c9b7cf6c4040a5bc8878382b3c62f" }
+serde_json = "1"
+
+# 3D-Maus (SpaceMouse): HID-Report-Auslesen (descriptor/layout) und der
+# Client der 3Dconnexion-Drivers (macOS, 3DxWare) — dieselben Crates wie in
+# SolidCraft. hidapi liest das Gerät selbst.
+solidcraft-space-mouse = { path = "/Users/hannes/Downloads/solidcraft-main/crates/space-mouse" }
+solidcraft-3dx-client = { path = "/Users/hannes/Downloads/solidcraft-main/crates/threedx-client" }
+hidapi = { version = "2.6.7", default-features = false, features = ["macos-shared-device"] }
+
+# Legacy-Pipeline (truck/Analytik-Mesher, für tests/t2_new.rs): wird von der
+# SolidCraft-Ansicht nicht mehr benutzt.
 truck-stepio = "0.3"
 truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
+truck-topology = "0.6"
+spade = { version = "2.15", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Für die Debug-Beispiele (probe.rs)
 ruststep = "0.4.0"
-
-# objc2/icrate 0.4 (über winit 0.29) prüft Objective-C-Typencodes nur mit
-# debug_assertions. Auf aktuellen macOS-Versionen schlägt diese Prüfung bei
-# NSScreen fälschlich fehl und beendet die App beim Start. Für die
-# Abhängigkeiten abschalten – der eigentliche Aufruf ist unverändert korrekt.
-[profile.dev.package.objc2]
-debug-assertions = false
-
-[profile.dev.package.icrate]
-debug-assertions = false

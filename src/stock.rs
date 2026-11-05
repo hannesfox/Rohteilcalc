@@ -7,12 +7,14 @@ use glam::{Mat3, Vec3};
 #[derive(Clone, Debug)]
 pub struct StockResult {
     /// [Länge (X), Breite (Y), Höhe (Z)] des ausgerichteten Bauteils.
+    #[allow(dead_code)] // bleibt Teil der Rohteil-Rechnung (Legacy-Pfad)
     pub part_size: Vec3,
     /// [Roh-X, Roh-Y, Roh-Z].
     pub stock_size: Vec3,
     /// 4.0 mm Spannrand unten.
     pub clamp_depth_z: f32,
     /// Mindestens 1.0 mm Planaufmaß oben.
+    #[allow(dead_code)] // bleibt Teil der Rohteil-Rechnung (Legacy-Pfad)
     pub top_allowance_z: f32,
     /// Ausrichtungsmatrix (Bauteilkoordinaten -> ausgerichtete Koordinaten).
     /// Bleibt für spätere CAD-Operationen erhalten.
@@ -32,14 +34,55 @@ impl Default for StockResult {
     }
 }
 
-struct Alignment {
-    rot: Mat3,
-    centroid: Vec3,
-    offset: Vec3,
+pub(crate) struct Alignment {
+    pub(crate) rot: Mat3,
+    pub(crate) centroid: Vec3,
+    pub(crate) offset: Vec3,
+}
+
+impl Alignment {
+    /// Wendet die Ausrichtung auf einen Punkt an (Bauteil -> ausgerichtet).
+    pub(crate) fn apply(&self, p: Vec3) -> Vec3 {
+        self.rot * (p - self.centroid) - self.offset
+    }
+
+    /// Wendet die Ausrichtung auf eine Richtung an (nur Rotation).
+    pub(crate) fn rotate_dir(&self, d: Vec3) -> Vec3 {
+        self.rot * d
+    }
+}
+
+impl StockResult {
+    /// Fertigungsregeln direkt aus den Bauteilmaßen (SolidCraft-Szenen-Pfad:
+    /// Ausrichtung passiert beim Kamera-/Szenen-Aufbau, die Maße braucht die
+    /// Rohteil-Rechnung trotzdem).
+    pub fn from_part_size(part: Vec3) -> Self {
+        if part == Vec3::ZERO {
+            return StockResult::default();
+        }
+        let stock_x = part.x + 5.0;
+        let stock_y = calculate_standard_y_stock(part.y);
+        let stock_z = calculate_standard_z_stock(part.z);
+        let top_allowance_z = stock_z - part.z - 4.0;
+        StockResult {
+            part_size: part,
+            stock_size: Vec3::new(stock_x, stock_y, stock_z),
+            clamp_depth_z: 4.0,
+            top_allowance_z,
+            transform: Mat3::IDENTITY,
+        }
+    }
 }
 
 /// Ermittelt die Hauptachsen (Trägheitsachsen/Kovarianz) und die
 /// Ausrichtungsmatrix: Längste Seite -> X, mittlere -> Y, kleinste -> Z.
+/// Ausrichtungsmatrix aus bereits gesammelten Vertices (alle Körper zusammen):
+/// für die SolidCraft-Szenen-Transformation (rigide) vor der Anzeige.
+pub fn alignment_for_vertices(vertices: &[Vec3]) -> Option<(Alignment, Vec3)> {
+    let (align, size) = compute_alignment(vertices);
+    (size != Vec3::ZERO).then_some((align, size))
+}
+
 fn compute_alignment(vertices: &[Vec3]) -> (Alignment, Vec3) {
     if vertices.is_empty() {
         return (
@@ -157,10 +200,9 @@ pub fn orient_and_align_bodies(bodies: &mut [MeshData]) -> StockResult {
         .iter()
         .flat_map(|b| b.vertices.iter().copied())
         .collect();
-    let (align, part_size) = compute_alignment(&all);
-    if part_size == Vec3::ZERO {
+    let Some((align, part_size)) = alignment_for_vertices(&all) else {
         return StockResult::default();
-    }
+    };
 
     for body in bodies.iter_mut() {
         for v in &mut body.vertices {
@@ -190,6 +232,7 @@ pub fn orient_and_align_bodies(bodies: &mut [MeshData]) -> StockResult {
 }
 
 /// Bequeme Variante für ein einzelnes Netz (Demo-Bauteil, CLI).
+#[allow(dead_code)]
 pub fn orient_and_align_mesh(mesh: &mut MeshData) -> StockResult {
     orient_and_align_bodies(std::slice::from_mut(mesh))
 }

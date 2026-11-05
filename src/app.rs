@@ -1,24 +1,26 @@
 //! Anwendungsoberfläche: Steuerpanel, Viewport-Interaktion und
-//! asynchrones Laden/Tessellieren.
-
+//! asynchrones Laden/Tessellieren (Import via SolidCraft).
 use crate::camera::{OrbitCamera, StandardView};
 use crate::mesh::generate_sample_milled_part;
-use crate::renderer::{CameraUniforms, SceneData, ViewMode, ViewportCallback};
-use crate::step::{self, Body, Quality, StepDocument};
-use crate::stock::{self, StockResult};
+use crate::renderer::{
+    ScModel, ScSession, SceneState, ViewCallback, ViewMode, demo_scene, make_frame,
+    render_camera,
+};
+use crate::step::Quality;
+use crate::space_mouse;
 use eframe::egui::{self, Color32, Pos2, RichText, Sense, Stroke, Vec2};
-use glam::Vec3;
+use solidcore_record::Vec3 as RcVec3;
+use solidcraft_geom::prelude::*;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
 struct LoadOk {
-    document: Option<Arc<StepDocument>>,
-    bodies: Vec<Body>,
-    stock: StockResult,
-    warnings: Vec<String>,
+    session: Option<ScSession>,
+    model: ScModel,
     quality: Quality,
     path: Option<PathBuf>,
+    warnings: usize,
 }
 
 struct LoadMsg {
@@ -31,46 +33,38 @@ pub struct AppState {
     mode: ViewMode,
     show_stock: bool,
     quality: Quality,
-    document: Option<Arc<StepDocument>>,
-    bodies: Vec<Body>,
-    stock: StockResult,
-    scene: Option<Arc<SceneData>>,
+    session: Option<ScSession>,
+    model: Option<Arc<ScModel>>,
+    gpustate: Option<SceneState>,
     revision: u64,
     file_path: Option<PathBuf>,
     status: String,
     status_is_error: bool,
     loading: Option<Receiver<LoadMsg>>,
+    /// 3D-Maus (SpaceMouse): Leser-Thread + geteilte Achsen; `None`, wenn
+    /// kein Gerät gelesen werden kann oder die app noch nicht begonnen hat.
+    spacemouse: Option<space_mouse::SpaceMouse>,
 }
 
 impl AppState {
-    pub fn new(cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
-        if let Some(render_state) = cc.wgpu_render_state.as_ref() {
-            let renderer = crate::renderer::SceneRenderer::new(
-                &render_state.device,
-                render_state.target_format,
-            );
-            render_state
-                .renderer
-                .write()
-                .callback_resources
-                .insert(renderer);
-        }
-
+    pub fn new(_cc: &eframe::CreationContext<'_>, initial: Option<PathBuf>) -> Self {
         let mut app = Self {
             camera: OrbitCamera::default(),
             mode: ViewMode::ShadedEdges,
             show_stock: true,
             quality: Quality::Medium,
-            document: None,
-            bodies: Vec::new(),
-            stock: StockResult::default(),
-            scene: None,
+            session: None,
+            model: None,
+            gpustate: None,
             revision: 0,
             file_path: None,
             status: String::new(),
             status_is_error: false,
             loading: None,
+            spacemouse: None,
         };
+        // Pipelines wurden in main (renderer::install) angelegt; egal wer
+        // zuerst — hier fehlt nur der scene upload.
         app.load_demo();
         if let Some(path) = initial {
             app.start_load(path, true);
@@ -79,35 +73,35 @@ impl AppState {
     }
 
     fn reset_camera(&mut self) {
-        if let Some(scene) = &self.scene {
-            self.camera.fit(scene.center, scene.radius);
+        if let Some(model) = &self.model {
+            self.camera.fit(model.center, model.radius);
         }
     }
 
     fn load_demo(&mut self) {
-        let mut mesh = generate_sample_milled_part(110.0, 42.0, 18.0);
-        let stock = stock::orient_and_align_mesh(&mut mesh);
-        self.bodies = vec![Body {
-            name: "Demo-Bauteil".to_string(),
-            mesh,
-            visible: true,
-        }];
-        self.stock = stock;
-        self.document = None;
-        self.file_path = None;
-        self.revision += 1;
-        self.rebuild_scene();
+        let mesh = generate_sample_milled_part(110.0, 42.0, 18.0);
+        match demo_scene(mesh, self.mode, self.show_stock) {
+            Ok(model) => {
+                self.session = None;
+                self.file_path = None;
+                self.set_model(model);
+                self.status =
+                    "Demo-Bauteil aktiv – STEP-Datei über „Öffnen“ laden oder ins Fenster ziehen."
+                        .to_string();
+                self.status_is_error = false;
+            }
+            Err(e) => {
+                self.status = format!("Demo-Bauteil: {e}");
+                self.status_is_error = true;
+            }
+        }
         self.reset_camera();
-        self.status =
-            "Demo-Bauteil aktiv – STEP-Datei über „Öffnen“ laden oder ins Fenster ziehen."
-                .to_string();
-        self.status_is_error = false;
     }
 
-    fn rebuild_scene(&mut self) {
+    fn set_model(&mut self, model: ScModel) {
         self.revision += 1;
-        let scene = SceneData::build(&self.bodies, &self.stock, self.revision);
-        self.scene = Some(Arc::new(scene));
+        self.model = Some(Arc::new(model));
+        self.gpustate = None; // Neu-Upload beim nächsten Bild
     }
 
     /// Lädt eine Datei im Hintergrund, damit die Oberfläche nicht blockiert.
@@ -116,31 +110,20 @@ impl AppState {
             return;
         }
         let quality = self.quality;
+        let mode = self.mode;
+        let show_stock = self.show_stock;
         let (tx, rx) = mpsc::channel();
         let path_clone = path.clone();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let doc = StepDocument::from_path(&path_clone)?;
-                let part = step::tessellate(&doc, quality)?;
-                let mut meshes: Vec<crate::mesh::MeshData> =
-                    part.bodies.into_iter().map(|b| b.mesh).collect();
-                let stock = stock::orient_and_align_bodies(&mut meshes);
-                let bodies = meshes
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, mesh)| Body {
-                        name: format!("Körper {}", i + 1),
-                        mesh,
-                        visible: true,
-                    })
-                    .collect();
+                let session = ScSession::open(&path_clone, quality)?;
+                let model = session.model(mode, show_stock)?;
                 Ok(LoadOk {
-                    document: Some(Arc::new(doc)),
-                    bodies,
-                    stock,
-                    warnings: part.warnings,
+                    session: Some(session),
+                    model,
                     quality,
                     path: Some(path_clone),
+                    warnings: 0,
                 })
             }))
             .unwrap_or_else(|_| {
@@ -160,53 +143,12 @@ impl AppState {
         self.status_is_error = false;
     }
 
-    /// Tesselliert das bereits geparste Dokument mit einer neuen Qualität.
-    fn start_retessellate(&mut self) {
-        let Some(doc) = self.document.clone() else {
+    /// Öffnet das bereits geladene Dokument mit einer neuen Qualität neu.
+    fn start_rettesellate(&mut self) {
+        let Some(path) = self.file_path.clone() else {
             return;
         };
-        if self.loading.is_some() {
-            return;
-        }
-        let quality = self.quality;
-        let path = self.file_path.clone();
-        let (tx, rx) = mpsc::channel();
-        let doc_for_thread = doc.clone();
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let part = step::tessellate(&doc_for_thread, quality)?;
-                let mut meshes: Vec<crate::mesh::MeshData> =
-                    part.bodies.into_iter().map(|b| b.mesh).collect();
-                let stock = stock::orient_and_align_bodies(&mut meshes);
-                let bodies = meshes
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, mesh)| Body {
-                        name: format!("Körper {}", i + 1),
-                        mesh,
-                        visible: true,
-                    })
-                    .collect();
-                Ok(LoadOk {
-                    document: Some(doc_for_thread),
-                    bodies,
-                    stock,
-                    warnings: part.warnings,
-                    quality,
-                    path,
-                })
-            }))
-            .unwrap_or_else(|_| {
-                Err("Beim Neu-Tessellieren ist ein interner Fehler aufgetreten.".to_string())
-            });
-            let _ = tx.send(LoadMsg {
-                result,
-                fit_camera: false,
-            });
-        });
-        self.loading = Some(rx);
-        self.status = format!("Tesselliere neu … (Qualität: {})", quality.label());
-        self.status_is_error = false;
+        self.start_load(path, false);
     }
 
     fn poll_loading(&mut self, ctx: &egui::Context) {
@@ -218,42 +160,33 @@ impl AppState {
                 self.loading = None;
                 match msg.result {
                     Ok(ok) => {
-                        self.document = ok.document;
-                        self.bodies = ok.bodies;
-                        self.stock = ok.stock;
-                        self.file_path = ok.path;
                         self.quality = ok.quality;
-                        self.rebuild_scene();
+                        self.file_path = ok.path.clone();
+                        self.session = ok.session;
+                        self.set_model(ok.model);
                         if msg.fit_camera {
                             self.reset_camera();
                         }
-                        let tri = self
-                            .scene
-                            .as_ref()
-                            .map(|s| s.triangle_count)
-                            .unwrap_or(0);
-                        let name = self
-                            .file_path
-                            .as_ref()
-                            .and_then(|p| p.file_name())
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| "STEP".to_string());
-                        let mut status = format!(
-                            "{name}: {tri} Dreiecke, Bauteil {:.1} × {:.1} × {:.1} mm",
-                            self.stock.part_size.x,
-                            self.stock.part_size.y,
-                            self.stock.part_size.z
-                        );
-                        if let Some(scale) = self.document.as_ref().map(|d| d.unit_scale) {
-                            if (scale - 1.0).abs() > f32::EPSILON {
-                                status.push_str(&format!(" (Dateieinheit × {scale} → mm)"));
+                        if let Some(model) = &self.model {
+                            let name = self
+                                .file_path
+                                .as_ref()
+                                .and_then(|p| p.file_name())
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "STEP".to_string());
+                            let mut status = format!(
+                                "{name}: {} Dreiecke, Bauteil {:.1} × {:.1} × {:.1} mm",
+                                model.triangle_count,
+                                model.part_size.x,
+                                model.part_size.y,
+                                model.part_size.z
+                            );
+                            if ok.warnings > 0 {
+                                status.push_str(&format!(" — {} Warnung(en)", ok.warnings));
                             }
+                            self.status = status;
+                            self.status_is_error = false;
                         }
-                        if !ok.warnings.is_empty() {
-                            status.push_str(&format!(" — {} Warnung(en)", ok.warnings.len()));
-                        }
-                        self.status = status;
-                        self.status_is_error = false;
                     }
                     Err(err) => {
                         self.status = format!("STEP konnte nicht geladen werden: {err}");
@@ -298,7 +231,7 @@ impl AppState {
         ui.horizontal(|ui| {
             ui.label("Qualität:");
             let before = self.quality;
-            egui::ComboBox::from_id_source("tess_quality")
+            egui::ComboBox::from_id_salt("tess_quality")
                 .selected_text(self.quality.label())
                 .show_ui(ui, |ui| {
                     for q in Quality::ALL {
@@ -306,7 +239,7 @@ impl AppState {
                     }
                 });
             if self.quality != before {
-                self.start_retessellate();
+                self.start_rettesellate();
             }
         });
 
@@ -315,8 +248,7 @@ impl AppState {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .or_else(|| self.document.as_ref().map(|d| d.name.clone()))
-            .unwrap_or_else(|| "–".to_string());
+            .unwrap_or_else(|| "Demo".to_string());
         ui.label(format!("Datei: {file_label}"));
 
         if !self.status.is_empty() {
@@ -335,53 +267,62 @@ impl AppState {
 
         ui.separator();
         ui.label(RichText::new("1. Bauteilmaße (ausgerichtet)").strong());
-        ui.label(format!("X (Länge):  {:.2} mm", self.stock.part_size.x));
-        ui.label(format!("Y (Breite): {:.2} mm", self.stock.part_size.y));
-        ui.label(format!("Z (Höhe):   {:.2} mm", self.stock.part_size.z));
+        if let Some(model) = &self.model {
+            ui.label(format!("X (Länge):  {:.2} mm", model.part_size.x));
+            ui.label(format!("Y (Breite): {:.2} mm", model.part_size.y));
+            ui.label(format!("Z (Höhe):   {:.2} mm", model.part_size.z));
 
-        ui.add_space(8.0);
-        ui.label(
-            RichText::new("2. Berechnetes Rohteil")
-                .strong()
-                .color(Color32::from_rgb(180, 130, 20)),
-        );
-        ui.label(format!(
-            "X-Rohmaß: {:.2} mm (+5.0 mm Sägeaufmaß)",
-            self.stock.stock_size.x
-        ));
-        ui.label(format!(
-            "Y-Rohmaß: {:.2} mm (Halbzeug-Staffel)",
-            self.stock.stock_size.y
-        ));
-        ui.label(format!(
-            "Z-Rohmaß: {:.2} mm (10-mm-Stufen)",
-            self.stock.stock_size.z
-        ));
+            ui.add_space(8.0);
+            ui.label(
+                RichText::new("2. Berechnetes Rohteil")
+                    .strong()
+                    .color(Color32::from_rgb(180, 130, 20)),
+            );
+            ui.label(format!(
+                "X-Rohmaß: {:.2} mm (+5.0 mm Sägeaufmaß)",
+                model.stock_size.x
+            ));
+            ui.label(format!(
+                "Y-Rohmaß: {:.2} mm (Halbzeug-Staffel)",
+                model.stock_size.y
+            ));
+            ui.label(format!(
+                "Z-Rohmaß: {:.2} mm (10-mm-Stufen)",
+                model.stock_size.z
+            ));
+        }
 
         ui.add_space(8.0);
         ui.label(RichText::new("3. Z-Spannsituation").strong());
-        ui.label(format!(
-            "• Schraubstock-Spanntiefe: {:.1} mm (unten)",
-            self.stock.clamp_depth_z
-        ));
-        ui.label(format!(
-            "• Planfräs-Aufmaß:         {:.1} mm (oben)",
-            self.stock.top_allowance_z
-        ));
+        ui.label("• Schraubstock-Spanntiefe: 4.0 mm (unten)");
+        if let Some(model) = &self.model {
+            ui.label(format!(
+                "• Planfräs-Aufmaß:         {:.1} mm (oben)",
+                (model.stock_size.z - model.part_size.z - 4.0).max(1.0)
+            ));
+        }
 
         ui.separator();
         ui.label(RichText::new("Darstellung").strong());
         ui.horizontal(|ui| {
             ui.label("Modus:");
-            egui::ComboBox::from_id_source("view_mode")
+            let before = self.mode;
+            egui::ComboBox::from_id_salt("view_mode")
                 .selected_text(self.mode.label())
                 .show_ui(ui, |ui| {
                     for m in ViewMode::ALL {
                         ui.selectable_value(&mut self.mode, m, m.label());
                     }
                 });
+            if self.mode != before {
+                self.rebuild();
+            }
         });
+        let before = self.show_stock;
         ui.checkbox(&mut self.show_stock, "Rohteil-Box anzeigen");
+        if self.show_stock != before {
+            self.rebuild();
+        }
 
         ui.add_space(6.0);
         ui.label("Ansicht:");
@@ -403,15 +344,17 @@ impl AppState {
             }
         });
 
-        if self.bodies.len() > 1 {
-            ui.add_space(6.0);
-            ui.label("Körper:");
-            let mut changed = false;
-            for body in &mut self.bodies {
-                changed |= ui.checkbox(&mut body.visible, &body.name).changed();
-            }
-            if changed {
-                self.rebuild_scene();
+        if let Some(model) = self.model.clone() {
+            if model.bodies.len() > 1 {
+                ui.add_space(6.0);
+                ui.label("Körper:");
+                for body in &model.bodies {
+                    let mut visible = body.visible;
+                    let name = body.name.clone();
+                    if ui.checkbox(&mut visible, &name).changed() {
+                        self.set_body_visible(&name, visible);
+                    }
+                }
             }
         }
 
@@ -423,26 +366,85 @@ impl AppState {
         ui.label("• Doppelklick: Einpassen");
         ui.label("• STEP-Datei ins Fenster ziehen: Laden");
 
-        let tri = self.scene.as_ref().map(|s| s.triangle_count).unwrap_or(0);
-        ui.add_space(4.0);
-        ui.label(format!("Dreiecke: {tri}"));
-        ui.label(format!(
-            "GPU-Modus: {}",
-            if self.document.is_some() {
-                "wgpu / MSAA 4×"
-            } else {
-                "wgpu / MSAA 4× (Demo)"
+        if let Some(model) = &self.model {
+            ui.add_space(4.0);
+            ui.label(format!("Kanten: {}", model.edge_count));
+            ui.label(format!(
+                "GPU-Modus: SolidCraft-Pipelines ({})",
+                model.triangle_count
+            ));
+        }
+    }
+
+    /// Szene mit neuen Anzeigeeinstellungen synchron neu bauen.
+    fn rebuild(&mut self) {
+        if let Some(session) = &self.session {
+            match session.model(self.mode, self.show_stock) {
+                Ok(model) => self.set_model(model),
+                Err(e) => {
+                    self.status = format!("Szene neu bauen: {e}");
+                    self.status_is_error = true;
+                }
             }
-        ));
+        } else {
+            // Demo-Darstellung wiederherstellen (ohne die Rohteil-Rechnung
+            // erneut zu durchlaufen — Größe bleibt gleich).
+            self.load_demo_preserve_camera();
+        }
+    }
+
+    fn load_demo_preserve_camera(&mut self) {
+        let mesh = generate_sample_milled_part(110.0, 42.0, 18.0);
+        if let Ok(model) = demo_scene(mesh, self.mode, self.show_stock) {
+            self.session = None;
+            self.file_path = None;
+            self.set_model(model);
+        }
+    }
+
+    fn set_body_visible(&mut self, name: &str, visible: bool) {
+        let Some(session) = &mut self.session else {
+            return;
+        };
+        if let Err(e) = session.set_visible(name, visible) {
+            self.status = e;
+            self.status_is_error = true;
+            return;
+        }
+        if let Some(session) = &self.session {
+            match session.model(self.mode, self.show_stock) {
+                Ok(model) => self.set_model(model),
+                Err(e) => {
+                    self.status = format!("Szene neu bauen: {e}");
+                    self.status_is_error = true;
+                }
+            }
+        }
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui) {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
+        let moving = response.dragged() || ui.input(|i| i.smooth_scroll_delta.y != 0.0);
         let shift = ui.input(|i| i.modifiers.shift);
         let pan_btn = response.dragged_by(egui::PointerButton::Secondary)
             || response.dragged_by(egui::PointerButton::Middle);
+
+        // 3D-Maus: ein Frame Bewegung, wenn der Deckel gedrückt ist — die
+        // Maßtabelle wie in SolidCrafts device_camera (Pan 0.6 Höhen/s,
+        // Zoom exp(1.5)/s, Orbit 250 px/s, Roll 2 rad/s), der Drehtisch
+        // über orbit_on_screen, so dass er trotz Kantung in Bildschirm-
+        // richtung lenkt.
+        if let Some(m) = self.spacemouse.as_mut().and_then(|sm| sm.tick(ui.ctx(), rect.height())) {
+            self.camera.pan(m.pan_x, m.pan_y, rect.height());
+            // m.zoom trägt die Framezeit bereits (Schub·step); SolidCraft
+            // rechnet identisch exp(−1.5·Schub·seconds) — hier also nicht
+            // noch einmal mit der Zeit multiplizieren.
+            self.camera.zoom_factor((-f64::from(m.zoom) * 1.5).exp() as f32);
+            self.camera.orbit_on_screen(m.orbit_x, m.orbit_y);
+            self.camera.roll_by(m.roll);
+        }
         if response.dragged() {
             let delta = response.drag_delta();
             if shift || pan_btn {
@@ -455,12 +457,13 @@ impl AppState {
             self.camera.fit_view();
         }
 
-        let scroll = ui.input(|i| i.raw_scroll_delta.y);
-        if scroll.abs() > 0.0 && response.hovered() {
+        let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+        let wheel_is_user = self.spacemouse.as_ref().is_none_or(|sm| sm.wheel_is_user());
+        if scroll.abs() > 0.0 && response.hovered() && wheel_is_user {
             self.camera.zoom(scroll);
         }
 
-        let Some(scene) = self.scene.clone() else {
+        let Some(model) = self.model.clone() else {
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
@@ -471,40 +474,46 @@ impl AppState {
             return;
         };
 
-        let aspect = rect.width() / rect.height().max(1.0);
-        let camera = CameraUniforms {
-            view_proj: self.camera.view_projection(aspect),
-            eye: self.camera.eye_position(),
+        // GPU-Upload je Revision anlegen (Szene → GPU beim ersten Bild).
+        let revision = self.revision;
+        let state = match &self.gpustate {
+            Some(st) if st.key == revision => st,
+            _ => {
+                let mut st = SceneState::new(&model.scene);
+                st.set_key(revision);
+                self.gpustate = Some(st);
+                self.gpustate.as_mut().unwrap()
+            }
         };
 
-        let callback = ViewportCallback::new(
-            scene,
-            camera,
-            rect.size(),
-            ui.ctx().pixels_per_point(),
-            self.mode,
-            self.show_stock,
+        let cam = render_camera(&self.camera);
+        let frame = make_frame(
+            state,
+            &model,
+            &cam,
+            [rect.width() * ui.ctx().pixels_per_point(), rect.height() * ui.ctx().pixels_per_point()],
+            moving,
         );
-        ui.painter()
-            .add(egui_wgpu::Callback::new_paint_callback(rect, callback));
 
-        // Achsen-Gizmo (2D-Overlay, an die Kamera gekoppelt)
-        let rotate = |p: Vec3| -> Vec3 {
-            let (sy, cy) = self.camera.yaw.sin_cos();
-            let (sp, cp) = self.camera.pitch.sin_cos();
-            let x1 = p.x * cy - p.y * sy;
-            let y1 = p.x * sy + p.y * cy;
-            let z1 = p.z;
-            Vec3::new(x1, y1 * cp - z1 * sp, y1 * sp + z1 * cp)
-        };
+        ui.painter().add(egui_wgpu::Callback::new_paint_callback(
+            rect,
+            ViewCallback(frame),
+        ));
+
+        // Achsen-Gizmo (2D-Overlay): die Weltachsen auf die Basis der
+        // Renderkamera projiziert — inklusive Roll, so dass der Kompass
+        // exakt so zeigt wie die Ansicht (vorher Nachbau der Drehungen,
+        // in dem Z falsch herum ging und Y bei Pitch fast stand).
+        let (right, up, _back) = cam.basis();
         let anchor = Pos2::new(rect.left() + 54.0, rect.bottom() - 54.0);
         for (axis, color, label) in [
-            (Vec3::X, Color32::from_rgb(220, 70, 70), "X"),
-            (Vec3::Y, Color32::from_rgb(60, 170, 90), "Y"),
-            (Vec3::Z, Color32::from_rgb(80, 130, 240), "Z"),
+            (RcVec3::new(1.0, 0.0, 0.0), Color32::from_rgb(220, 70, 70), "X"),
+            (RcVec3::new(0.0, 1.0, 0.0), Color32::from_rgb(60, 170, 90), "Y"),
+            (RcVec3::new(0.0, 0.0, 1.0), Color32::from_rgb(80, 130, 240), "Z"),
         ] {
-            let v = rotate(axis);
-            let end = anchor + Vec2::new(v.x, -v.z) * 36.0;
+            // Bildschirm x zeigt nach rechts (egui-y nach unten), die Welt-
+            // skizze nach oben; Streuung in die Tiefe (back) bleibt unberücksichtigt.
+            let end = anchor + Vec2::new(axis.dot(right) as f32, -(axis.dot(up) as f32)) * 36.0;
             ui.painter()
                 .line_segment([anchor, end], Stroke::new(2.0_f32, color));
             ui.painter().text(
@@ -531,6 +540,7 @@ impl AppState {
                 rect.shrink(12.0),
                 10.0,
                 Stroke::new(2.5_f32, Color32::from_rgb(120, 200, 255)),
+                egui::StrokeKind::Outside,
             );
             painter.text(
                 rect.center(),
@@ -544,14 +554,19 @@ impl AppState {
 }
 
 impl eframe::App for AppState {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_loading(ctx);
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        // 3D-Maus beim ersten Bild anfangen (braucht den egui-Context).
+        if self.spacemouse.is_none() {
+            self.spacemouse = space_mouse::start(&ctx);
+        }
+        self.poll_loading(&ctx);
 
         let dropped = ctx.input(|i| {
             i.raw
                 .dropped_files
                 .iter()
-                .find_map(|file| file.path.clone())
+                .find_map(|file| Some(file.path().to_path_buf()))
         });
         if let Some(path) = dropped {
             self.start_load(path, true);
@@ -576,16 +591,19 @@ impl eframe::App for AppState {
             }
         });
 
-        egui::SidePanel::left("control_panel")
-            .min_width(360.0)
+        egui::Panel::left("control_panel")
+            .min_size(360.0)
             .resizable(true)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| self.ui_panel(ui));
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Color32::from_rgb(210, 216, 226)))
-            .show(ctx, |ui| self.viewport(ui));
+            .frame(
+                egui::Frame::default()
+                    .fill(Color32::from_rgb(210, 216, 226)),
+            )
+            .show(ui, |ui| self.viewport(ui));
     }
 }
 
