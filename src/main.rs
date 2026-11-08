@@ -13,6 +13,7 @@ mod camera;
 mod mesh;
 #[allow(dead_code)]
 mod mesher;
+mod pick;
 mod renderer;
 mod shadow;
 mod space_mouse;

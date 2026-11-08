@@ -193,16 +193,57 @@ impl Drop for SpaceMouse {
         solidcraft_3dx_client::stop();
     }
 }
+// ---------------------------------------------------------
+// Start / Treiberstatus
+// ---------------------------------------------------------
 
-/// Startet den Leser. `None`, wenn nichts gelesen werden kann (anderes
-/// System, HID ohne Zugriff) — die Anwendung läuft einfach ohne 3D-Maus.
-#[cfg(not(target_os = "macos"))]
-pub fn start(_ctx: &egui::Context) -> Option<SpaceMouse> {
-    None
+/// Startet den Leser. `None`, wenn nichts gelesen werden kann — die
+/// Anwendung läuft einfach ohne 3D-Maus.
+pub fn start(ctx: &egui::Context) -> Option<SpaceMouse> {
+    #[cfg(target_os = "macos")]
+    {
+        let now = Instant::now();
+        let shared = Arc::new(Mutex::new(Reading::new(now)));
+        let reader_state = Arc::clone(&shared);
+        let reader_ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("rohteilcalc-3d-mouse".into())
+            .spawn(move || mod_reader::reader(reader_ctx, reader_state));
+        if let Err(error) = spawned {
+            eprintln!("3D-Maus: Leser konnte nicht starten: {error}");
+        }
+        // macOS: der 3Dconnexion-Driver gibt das Gerät nur seinen eigenen
+        // Clients; die Anwendung meldet sich zusätzlich als einer. Läuft der
+        // Helper nicht, liest der HID-Leser oben selbst.
+        mod_reader::start_driver_client(ctx, Arc::clone(&shared));
+        return Some(SpaceMouse { shared, last_frame: now, moved_at: None, wheel_is_device: false });
+    }
+    #[cfg(target_os = "windows")]
+    {
+        let now = Instant::now();
+        let shared = Arc::new(Mutex::new(Reading::new(now)));
+        let reader_state = Arc::clone(&shared);
+        let reader_ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("rohteilcalc-3d-mouse".into())
+            .spawn(move || windows_reader::reader(reader_ctx, reader_state));
+        if let Err(error) = spawned {
+            eprintln!("3D-Maus: Leser konnte nicht starten: {error}");
+        }
+        return Some(SpaceMouse { shared, last_frame: now, moved_at: None, wheel_is_device: false });
+    }
+    #[allow(unreachable_code)]
+    {
+        // Linux (spacenavd) und andere: noch nicht portiert — ohne 3D-Maus.
+        let _ = ctx;
+        None
+    }
 }
 
 /// Zustand der Treiberanbindung für die Sonde: (Client registriert?,
-/// Gerät vom Driver gemeldet?). Ohne macOS: immer nein.
+/// Gerät vom Driver gemeldet?). Nur macOS hat einen Driver-Client;
+/// auf Windows liest die App direkt (über Plug and Play gefundene
+/// Interfaces), dort also immer nein.
 #[cfg(not(target_os = "macos"))]
 pub fn driver_status() -> (bool, bool) {
     (false, false)
@@ -218,31 +259,15 @@ pub fn driver_status() -> (bool, bool) {
     )
 }
 
-#[cfg(target_os = "macos")]
-pub fn start(ctx: &egui::Context) -> Option<SpaceMouse> {
-    let now = Instant::now();
-    let shared = Arc::new(Mutex::new(Reading::new(now)));
-    let reader_state = Arc::clone(&shared);
-    let reader_ctx = ctx.clone();
-    let spawned = std::thread::Builder::new()
-        .name("rohteilcalc-3d-mouse".into())
-        .spawn(move || mod_reader::reader(reader_ctx, reader_state));
-    if let Err(error) = spawned {
-        eprintln!("3D-Maus: Leser konnte nicht starten: {error}");
-    }
-    // macOS: der 3Dconnexion-Driver gibt das Gerät nur seinen eigenen
-    // Clients; die Anwendung meldet sich zusätzlich als einer. Läuft der
-    // Helper nicht, liest der HID-Leser oben selbst.
-    mod_reader::start_driver_client(ctx, Arc::clone(&shared));
-    Some(SpaceMouse { shared, last_frame: now, moved_at: None, wheel_is_device: false })
-}
+// ---------------------------------------------------------
+// Gemeinsames Geräte-Lesen (macOS + Windows)
+// ---------------------------------------------------------
 
-#[cfg(target_os = "macos")]
-mod mod_reader {
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod device_reader {
     use std::ffi::CString;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     use egui::Context;
     use hidapi::{HidApi, HidDevice};
@@ -250,19 +275,25 @@ mod mod_reader {
 
     use super::{Reading, REPAINT_EVERY, STALE_AFTER};
 
-    /// Hat der 3Dconnexion-Driver das Gerät, meldet er den Deckel selbst —
-    /// direkte HID-Reports würden doppelt zählen (und scheitern).
-    pub(super) static DRIVER_CONNECTED: AtomicBool = AtomicBool::new(false);
+    /// Platz für einen Input-Report (4096 Bytes Descriptor-Platz plus die
+    /// Report-ID); ein kürzerer Puffer stutzt einen längeren Report ab, und
+    /// ein gestutzter Report fällt ganz.
+    const REPORT_BUFFER_BYTES: usize = 4096 + 1;
+    /// Eine Runde Pause, bevor wieder enummeriert wird.
+    const RETRY_AFTER: Duration = Duration::from_secs(2);
 
-    /// ist der Client einmal beim Driver eingetragen, so hält der Driver das
-    /// Gerät — ein Fehlschlag beim direkten Öffnen ist dann keine Meldung.
-    pub(super) static DRIVER_REGISTERED: AtomicBool = AtomicBool::new(false);
+    /// Hat der 3DxWare-Driver das Gerät (nur macOS-Klient), meldet er den
+    /// Deckel selbst — direkte HID-Reports würden doppelt zählen (und scheitern).
+    #[cfg(target_os = "macos")]
+    pub(super) fn driver_keeps_device() -> bool {
+        super::mod_reader::DRIVER_CONNECTED.load(std::sync::atomic::Ordering::Relaxed)
+    }
 
-    /// Der Generic-Desktop-Usage „Multi-Axis Controller“ benennt die
-    /// Bewegungs-Schnittstelle einer 3D-Maus — egal von wem — und schließt
-    /// gewöhnliche Mäuse und die Tastatur-Interfaces der 3D-Mäuse aus.
-    fn is_3d_mouse(info: &hidapi::DeviceInfo) -> bool {
-        info.usage_page() == 0x01 && info.usage() == 0x08
+    /// Ohne macOS-Klient liest die App immer direkt (Windows: Plug and Play
+    /// statt Treiber Registry — dort ist kein Klient, objektmodus reicht).
+    #[cfg(not(target_os = "macos"))]
+    pub(super) fn driver_keeps_device() -> bool {
+        false
     }
 
     /// Ein offenes 3D-Maus-Interface: das Gerät und der Ort der Achsen in
@@ -302,7 +333,7 @@ mod mod_reader {
     /// ihren Report in Ruhe); gleichzeitig frischt er die Timestamps der
     /// gesendeten Achsen auf, so dass sie frisch bleibt.
     fn publish(ctx: &Context, shared: &Mutex<Reading>, layout: Layout, report: &[u8]) {
-        if DRIVER_CONNECTED.load(Ordering::Relaxed) {
+        if driver_keeps_device() {
             return;
         }
         if let Ok(mut reading) = shared.lock() {
@@ -347,34 +378,14 @@ mod mod_reader {
         }
     }
 
-    /// Die Pfade der Interfaces, die 3D-Mäuse sein können, aus hidapis
-    /// Enummerierung (IOKits Registry).
-    fn candidates(api: &mut HidApi) -> Vec<CString> {
-        if let Err(error) = api.refresh_devices() {
-            eprintln!("3D-Maus: Geräteliste fehlgeschlagen: {error}");
-            return Vec::new();
-        }
-        api.device_list()
-            .filter(|info| is_3d_mouse(info))
-            .map(|info| info.path().to_owned())
-            .collect()
-    }
-
-    /// Platz für einen Input-Report (4096 Bytes Descriptor-Platz plus die
-    /// Report-ID); ein kürzerer Puffer stutzt einen längeren Report ab, und
-    /// ein gestutzter Report fällt ganz.
-    const REPORT_BUFFER_BYTES: usize = 4096 + 1;
-    /// Eine Runde Pause, bevor wieder enummeriert wird.
-    const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
-
     /// Liest alle Kandidaten und folgt dem gerade benutzten. Der erste wird
     /// von Anfang an gelesen; ein anderer übernimmt, sobald er sich bewegt,
-    /// während der gelesene sich seit `STALE_AFTER` nicht mehr bewegt hat
+    /// während der gelesene sich seit [`STALE_AFTER`] nicht mehr bewegt hat
     /// (zwei Geräte, die zugleich bewegt werden, reichen das Lesen nicht hin
     /// und her — z. B. ein Empfänger, der sich öffnet und nie scheitert, darf
     /// eine SpaceMouse daneben nie verdrängen). Reports des gelesenen Geräts
     /// — auch seine Nullen in Ruhe — melden sich, so lange das Lesen läuft;
-    /// daraus altert jedes Achse. Ein Kandidat mit Fehler fällt weg; war es
+    /// daraus altert jede Achse. Ein Kandidat mit Fehler fällt weg; war es
     /// der gelesene, endet das Lesen. Läuft leer, wenn kein Kandidat mehr
     /// übrig ist.
     fn follow(ctx: &Context, shared: &Mutex<Reading>, mut candidates: Vec<Candidate>) {
@@ -428,28 +439,36 @@ mod mod_reader {
         reset(ctx, shared);
     }
 
-    /// Der Leser: enummeriert, öffnet, liest, folgt dem benutzten Gerät;
-    /// wenn keins mehr übrig ist, erst nach einer Pause wieder.
-    pub(super) fn reader(ctx: Context, shared: Arc<Mutex<Reading>>) {
-        let Ok(mut api) = HidApi::new() else {
-            eprintln!("3D-Maus: HID-Initialisierung fehlgeschlagen");
-            return;
-        };
+    /// Der Leser: öffnet die Kandidaten (liefert die angehängte Funktion;
+    /// macOS über hidapi-Enumeration, Windows über Plug and Play), liest,
+    /// folgt dem benutzten Gerät; wenn keins mehr übrig ist, erst nach einer
+    /// Pause wieder. `api` kommt außen (Windows macht den Kontext mit
+    /// ausgeschalteter Geräte-Suche). Fehlschläge je Gerät nur einmal
+    /// melden — der 3Dx-Driver hält sein Gerät dauerhaft exklusiv; diese
+    /// Meldung jede Runde zu wiederholen wäre bloß Lärm.
+    pub(super) fn reader(
+        ctx: Context,
+        shared: Arc<Mutex<Reading>>,
+        api: &mut HidApi,
+        candidates: &dyn Fn(&mut HidApi) -> Vec<CString>,
+    ) {
+        let mut reported: std::collections::HashSet<CString> = std::collections::HashSet::new();
         loop {
-            let open: Vec<Candidate> = candidates(&mut api)
+            let open: Vec<Candidate> = candidates(api)
                 .into_iter()
                 .filter_map(|path| {
-                    let device = api.open_path(&path).inspect_err(|error| {
-                        // macOS: fehlende Erlaubnis (Input Monitoring), oder
-                        // der 3DxWare-Helfer hält das Gerät — mit dem Driver
-                        // ist das kein Problem, sondern sein Zustand.
-                        if !DRIVER_CONNECTED.load(Ordering::Relaxed)
-                            && !DRIVER_REGISTERED.load(Ordering::Relaxed)
-                        {
-                            eprintln!("3D-Maus: Gerät nicht zu öffnen: {error}");
+                    let device = match api.open_path(&path) {
+                        Ok(device) => {
+                            reported.remove(&path);
+                            device
                         }
-                    })
-                    .ok()?;
+                        Err(error) => {
+                            if reported.insert(path.clone()) {
+                                eprintln!("3D-Maus: Gerät nicht zu öffnen: {error}");
+                            }
+                            return None;
+                        }
+                    };
                     let info = device.get_device_info().ok()?;
                     let layout = device_layout(&device, info.vendor_id())?;
                     Some(Candidate { device, layout })
@@ -459,10 +478,65 @@ mod mod_reader {
             std::thread::sleep(RETRY_AFTER);
         }
     }
+}
+
+// ---------------------------------------------------------
+// macOS: hidapi-Enumeration + 3Dconnexion-Driver-Klient
+// ---------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+mod mod_reader {
+    use std::ffi::CString;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    use egui::Context;
+    use hidapi::HidApi;
+
+    use super::{Reading, device_reader};
+
+    /// Hat der 3Dconnexion-Driver das Gerät, meldet er den Deckel selbst —
+    /// direkte HID-Reports würden doppelt zählen (und scheitern).
+    pub(in crate::space_mouse) static DRIVER_CONNECTED: AtomicBool = AtomicBool::new(false);
+
+    /// ist der Client einmal beim Driver eingetragen, so hält der Driver das
+    /// Gerät — ein Fehlschlag beim direkten Öffnen ist dann keine Meldung.
+    pub(in crate::space_mouse) static DRIVER_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+    /// Der Generic-Desktop-Usage „Multi-Axis Controller“ benennt die
+    /// Bewegungs-Schnittstelle einer 3D-Maus — egal von wem — und schließt
+    /// gewöhnliche Mäuse und die Tastatur-Interfaces der 3D-Mäuse aus.
+    fn is_3d_mouse(info: &hidapi::DeviceInfo) -> bool {
+        info.usage_page() == 0x01 && info.usage() == 0x08
+    }
+
+    /// Die Pfade der Interfaces, die 3D-Mäuse sein können, aus hidapis
+    /// Enumeration (IOKits Registry).
+    pub(in crate::space_mouse) fn candidates(api: &mut HidApi) -> Vec<CString> {
+        if let Err(error) = api.refresh_devices() {
+            eprintln!("3D-Maus: Geräteliste fehlgeschlagen: {error}");
+            return Vec::new();
+        }
+        api.device_list()
+            .filter(|info| is_3d_mouse(info))
+            .map(|info| info.path().to_owned())
+            .collect()
+    }
+
+    // macOS: der Leser baut den hidapi-Kontext (mit Enumeration) und
+    /// übergibt die Kandidaten-Suche an [`device_reader::reader`].
+    pub(in crate::space_mouse) fn reader(ctx: Context, shared: Arc<Mutex<Reading>>) {
+        let Ok(mut api) = HidApi::new() else {
+            eprintln!("3D-Maus: HID-Initialisierung fehlgeschlagen");
+            return;
+        };
+        device_reader::reader(ctx, shared, &mut api, &candidates);
+    }
 
     /// macOS: der 3Dconnexion-Driver meldet den Deckel an angemeldete
     /// Clients — Achsen nach den Einstellungen des Benutzers im 3DxWare.
-    pub(super) fn start_driver_client(ctx: &Context, shared: Arc<Mutex<Reading>>) {
+    pub(in crate::space_mouse) fn start_driver_client(ctx: &Context, shared: Arc<Mutex<Reading>>) {
         use solidcraft_3dx_client::Event;
         // In den Callbacks, die der Client-Thread ruft.
         let (ctx, shared) = (ctx.clone(), shared);
@@ -474,7 +548,12 @@ mod mod_reader {
                 }
                 Event::DeviceRemoved => {
                     DRIVER_CONNECTED.store(false, Ordering::Relaxed);
-                    reset(&ctx, &shared);
+                    // Das Gerät geht zum Driver — die letzte Position des
+                    // direkten Lesens darf nicht hängen bleiben.
+                    if let Ok(mut reading) = shared.lock() {
+                        *reading = Reading::new(Instant::now());
+                    }
+                    ctx.request_repaint();
                 }
                 Event::Axes { translation, rotation } => {
                     if let Ok(mut reading) = shared.lock() {
@@ -487,7 +566,7 @@ mod mod_reader {
                             rotation[2],
                         ];
                         reading.at = [Instant::now(); 6];
-                        ctx.request_repaint_after(REPAINT_EVERY);
+                        ctx.request_repaint_after(super::REPAINT_EVERY);
                     }
                 }
                 Event::Buttons(_) => {}
@@ -502,5 +581,49 @@ mod mod_reader {
         if let Err(error) = started {
             eprintln!("3D-Maus: kein Driver-Client: {error}");
         }
+    }
+}
+
+// ---------------------------------------------------------
+// Windows: Plug-and-Play-Suche + direkte HID-Lesung
+// ---------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+mod windows_hid;
+
+#[cfg(target_os = "windows")]
+mod windows_reader {
+    use std::ffi::CString;
+    use std::sync::{Arc, Mutex};
+
+    use egui::Context;
+    use hidapi::HidApi;
+
+    use super::{Reading, device_reader};
+
+    /// HID-Kontext auf Windows: hidapis eigene Gerätesuche ist aus (SolidCraft
+    /// #2614), so dass `HidApi::new` kein einziges anderes Gerät anspricht —
+    /// die Kandidaten findet Plug and Play ([`windows_hid`]). Discovery
+    /// ausschalten panics nur, wenn ein Kontext mit Discovery existiert; der
+    /// Leser ist die einzige Stelle, die einen Kontext macht.
+    fn hid_api() -> hidapi::HidResult<HidApi> {
+        HidApi::disable_device_discovery();
+        HidApi::new()
+    }
+
+    /// Die Pfade der 3D-Maus-Interfaces: Plug and Play fragt, hidapi öffnet
+    /// nur die Treffer.
+    pub(in crate::space_mouse) fn candidates(_api: &mut HidApi) -> Vec<CString> {
+        super::windows_hid::multi_axis_controllers()
+    }
+
+    /// Der Windows-Leser: gleiches Gerätemachen wie macOS, nur die
+    /// Kandidaten-Findung unterscheidet sich.
+    pub(in crate::space_mouse) fn reader(ctx: Context, shared: Arc<Mutex<Reading>>) {
+        let Ok(mut api) = hid_api() else {
+            eprintln!("3D-Maus: HID-Initialisierung fehlgeschlagen");
+            return;
+        };
+        device_reader::reader(ctx, shared, &mut api, &candidates);
     }
 }

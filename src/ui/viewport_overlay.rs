@@ -8,7 +8,7 @@ use solidcore_record::Vec3 as RcVec3;
 
 use eframe::egui::{self, Align2, FontId, Frame, Margin, Pos2, RichText, Ui, Vec2};
 
-use super::theme;
+use super::{theme, widgets};
 
 /// Alle Ansichts-Buttons, in fester Reihenfolge.
 /// Tastenkürzel je Standardansicht (None = nur Schaltfläche).
@@ -64,6 +64,17 @@ pub(crate) fn toolbar(app: &mut AppState, ui: &mut Ui) {
                 }
                 if ui.button("⟲").on_hover_text("Kamera zurücksetzen (Iso)").clicked() {
                     app.camera_reset();
+                }
+                ui.separator();
+                // Projektion umschalten (Ortho = maßstabsgetreu an den
+                // Standardansichten).
+                let was = app.camera.perspective;
+                if widgets::segmented(
+                    ui,
+                    &mut app.camera.perspective,
+                    &[(true, "Persp"), (false, "Ortho")],
+                ) {
+                    app.camera.projection_adjust_distance(was);
                 }
             });
         })

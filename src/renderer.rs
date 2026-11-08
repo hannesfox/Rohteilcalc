@@ -23,7 +23,7 @@ use solidcraft_render::SceneMesh;
 use solidcraft_geom::prelude::*;
 use solidcore_record::Vec3 as RcVec3;
 
-use glam::Vec3;
+use glam::{Mat3, Vec3};
 use crate::camera::OrbitCamera;
 use crate::mesh::MeshData;
 use crate::stock::{StockParams, StockResult};
@@ -87,6 +87,14 @@ pub struct ScModel {
     /// über alle Netze durchnummeriert.
     pub part_positions: Vec<[f32; 3]>,
     pub part_triangles: Vec<[u32; 3]>,
+    /// Rotation der aktuellen Ausrichtung (Datei- → Anzeige-Koordinaten),
+    /// um eine im Viewport angeklickte Flächennormale zurückzurechnen.
+    pub align_rot: Mat3,
+    /// Rundmaterial aktiv (Rohteil = Zylinder statt Box).
+    pub round: bool,
+    /// Achse des Rundstoffs (0 = liegend entlang X, 2 = stehend entlang
+    /// Z); `None` bei rechteckigem Rohteil.
+    pub round_axis: Option<usize>,
 }
 
 // ---------------------------------------------------------
@@ -142,6 +150,19 @@ impl ScSession {
         mode: ViewMode,
         show_stock: bool,
         stock_params: StockParams,
+    ) -> Result<ScModel, String> {
+        self.model_with_down(mode, show_stock, stock_params, None)
+    }
+
+    /// Wie [`ScSession::model`], aber mit übersteuerter Ausrichtung:
+    /// `down` ist die Normale (Datei-Koordinaten) der Fläche, die unten
+    /// (−Z) liegen soll — siehe „Neu ausrichten“.
+    pub fn model_with_down(
+        &self,
+        mode: ViewMode,
+        show_stock: bool,
+        stock_params: StockParams,
+        align_down: Option<Vec3>,
     ) -> Result<ScModel, String> {
         let s = &self.session;
         let st = s.world_state().map_err(|e| e.to_string())?;
@@ -215,7 +236,7 @@ impl ScSession {
             scene.lines.extend(lines);
             bodies.push(ScBodyInfo { name: body.name.clone(), visible });
         }
-        build_view(scene, mode, show_stock, bodies, &stock_params)
+        build_view(scene, mode, show_stock, bodies, &stock_params, align_down)
     }
 }
 
@@ -240,6 +261,7 @@ pub fn build_view(
     show_stock: bool,
     bodies: Vec<ScBodyInfo>,
     stock_params: &StockParams,
+    align_down: Option<Vec3>,
 ) -> Result<ScModel, String> {
     // Alle Positions-Vertices der Szene (Datei-Koordinaten) sammeln.
     let all: Vec<Vec3> = scene
@@ -248,18 +270,23 @@ pub fn build_view(
         .flat_map(|m| m.mesh.positions.iter())
         .map(|p| Vec3::new(p.x as f32, p.y as f32, p.z as f32))
         .collect();
-    let Some((align, part_size)) = crate::stock::alignment_for_vertices(&all) else {
+    // Ausrichtung: automatisch (Hauptträgheitsachsen) oder übersteuert
+    // mit einer vorgegebenen „unten“-Richtung („Neu ausrichten“).
+    let oriented = match align_down {
+        Some(d) => crate::stock::alignment_with_down(&all, d),
+        None => crate::stock::alignment_for_vertices_refined(&all),
+    };
+    let Some((align, part_size)) = oriented else {
         return Err("keine ausrichtbare Geometrie".to_string());
     };
 
     apply_align(&mut scene, &align);
 
-    // Die Bauteil-Netze für die Schattenkontur festhalten, bevor die
-    // Hilfsgeometrie (Rohteil-Box, Bodenraster) dazukommt: Dreiecke über
+    // Die Bauteil-Netze vorläufig festhalten — Datengrundlage für die
+    // Rundmaterial-Erkennung (vor Lift/Hilfsgeometrie). Dreiecke über
     // alle Netze durchnummeriert.
     let mut part_positions: Vec<[f32; 3]> = Vec::new();
     let mut part_triangles: Vec<[u32; 3]> = Vec::new();
-    let mut base: u32 = 0;
     for m in &scene.meshes {
         let start = part_positions.len() as u32;
         for p in &m.mesh.positions {
@@ -268,9 +295,69 @@ pub fn build_view(
         for t in &m.mesh.triangles {
             part_triangles.push([t[0] + start, t[1] + start, t[2] + start]);
         }
-        base = part_positions.len() as u32;
     }
-    let _ = base;
+
+    // Rundmaterial: kreisförmiger Querschnitt senkrecht zur Achse erkennen
+    // (liegender Stab entlang X, stehende Scheibe entlang Z) oder über den
+    // Schalter „Rundmaterial“ übersteuern. Ohne Treffer wird mit erzwungenem
+    // Schalter liegend (X) gerechnet.
+    let detected_round = crate::stock::detect_round_axis(&part_positions, &part_triangles);
+    let round_axis: Option<usize> = match stock_params.round_stock {
+        Some(false) => None,
+        Some(true) => Some(detected_round.unwrap_or(0)),
+        None => detected_round,
+    };
+    let stock = match round_axis {
+        Some(axis) => crate::stock::round_stock_for_axis(part_size, axis, *stock_params),
+        None => StockResult::from_part_size_with_params(part_size, *stock_params),
+    };
+
+    // Rundmaterial aufliegt auf dem Boden: die Netze werden in Z so
+    // angehoben, dass der Zylinder unten auf 0 liegt (liegend: um die
+    // Differenz Zylinder-Ø/Bauteil-Querschnitt; stehend: halbes Sägeaufmaß,
+    // damit das Bauteil axial mittig im Stab sitzt). Recheck bleibt 0.
+    let lift_z = match round_axis {
+        Some(2) => stock_params.saw_x_mm * 0.5,
+        Some(_) => (stock.stock_size.z - part_size.z).max(0.0) * 0.5,
+        None => 0.0,
+    };
+    if lift_z != 0.0 {
+        let shift = |z: &mut f64| *z += f64::from(lift_z);
+        for m in &mut scene.meshes {
+            // Die Netze stecken in geteilten Arcs — Daten übernehmen,
+            // anheben, neu verpacken (einmalig beim Laden).
+            let mut mesh_data = (*m.mesh).clone();
+            for p in &mut mesh_data.positions {
+                shift(&mut p.z);
+            }
+            for e in &mut mesh_data.edges {
+                for pt in e {
+                    shift(&mut pt.z);
+                }
+            }
+            m.mesh = Arc::new(mesh_data);
+        }
+        for l in &mut scene.lines {
+            for p in &mut l.points {
+                shift(&mut p.z);
+            }
+        }
+    }
+
+    // Die Bauteil-Netze final festhalten (nach dem Anheben) — Datengrundlage
+    // für Schattenkontur, Picking und Volumen: Dreiecke über alle Netze
+    // durchnummeriert.
+    let mut part_positions: Vec<[f32; 3]> = Vec::new();
+    let mut part_triangles: Vec<[u32; 3]> = Vec::new();
+    for m in &scene.meshes {
+        let start = part_positions.len() as u32;
+        for p in &m.mesh.positions {
+            part_positions.push([p.x as f32, p.y as f32, p.z as f32]);
+        }
+        for t in &m.mesh.triangles {
+            part_triangles.push([t[0] + start, t[1] + start, t[2] + start]);
+        }
+    }
 
     // Bauteilvolumen (Signed-Tetra-Summe) — für das Materialverhältnis.
     let volume_mm3: f64 = part_triangles
@@ -312,17 +399,47 @@ pub fn build_view(
     let radius = (ext.length() * 0.5).max(1.0);
     let triangle_count: usize = scene.meshes.iter().map(|m| m.mesh.triangles.len()).sum();
 
-    let stock = StockResult::from_part_size_with_params(part_size, *stock_params);
-    // Rohteil-Box: X/Y zentriert ums Bauteil, unten ins Spannmaß.
+    // Rohteil-Box: X/Y zentriert ums Bauteil — über die tatsächliche
+    // Boundingbox-Mitte, damit es für beide Lagen stimmt (automatisch
+    // [0, ext], manuell „Neu ausrichten“ [−ext/2, +ext/2]) —, unten ins
+    // Spannmaß. Bei Rundmaterial spannt die Box den Zylinder auf.
     let size = stock.stock_size;
-    let bmin = Vec3::new(
-        (part_size.x - size.x) * 0.5,
-        (part_size.y - size.y) * 0.5,
-        -stock.clamp_depth_z,
-    );
-    let bmax = bmin + size;
+    let part_mid = (bb_min + bb_max) * 0.5;
+    let (bmin, bmax) = if stock.round {
+        // Zylinder-Aufspannung: Box um den Zylinder, Boden auf 0.
+        (
+            Vec3::new(part_mid.x - size.x * 0.5, part_mid.y - size.y * 0.5, 0.0),
+            Vec3::new(part_mid.x + size.x * 0.5, part_mid.y + size.y * 0.5, size.z),
+        )
+    } else {
+        let bmin = Vec3::new(
+            part_mid.x - size.x * 0.5,
+            part_mid.y - size.y * 0.5,
+            -stock.clamp_depth_z,
+        );
+        (bmin, bmin + size)
+    };
     if show_stock {
-        add_stock_box(&mut scene, bmin, bmax, stock.clamp_depth_z);
+        if stock.round {
+            // Zylinder-Achse: stehend (Z) vertikal von Boden bis Oberkante,
+            // liegend (X) quer durch die Box auf Ø/2-Höhe. Ø liegt laut
+            // Rohteil-Konvention immer in Y (stehend: X/Y = Ø, Z = Länge).
+            let radius = size.y * 0.5;
+            let (a, b) = if round_axis.unwrap() == 2 {
+                (
+                    Vec3::new(part_mid.x, part_mid.y, 0.0),
+                    Vec3::new(part_mid.x, part_mid.y, size.z),
+                )
+            } else {
+                (
+                    Vec3::new(part_mid.x - size.x * 0.5, part_mid.y, size.z * 0.5),
+                    Vec3::new(part_mid.x + size.x * 0.5, part_mid.y, size.z * 0.5),
+                )
+            };
+            add_stock_cylinder(&mut scene, round_axis.unwrap(), a, b, radius);
+        } else {
+            add_stock_box(&mut scene, bmin, bmax, stock.clamp_depth_z);
+        }
     }
     add_ground(&mut scene, bmin, bmax);
 
@@ -344,6 +461,9 @@ pub fn build_view(
         bodies,
         part_positions,
         part_triangles,
+        align_rot: align.rot,
+        round: stock.round,
+        round_axis,
     })
 }
 
@@ -397,17 +517,11 @@ pub fn scene_with_shadow_contour(
     if let Some(first) = contour.first().copied() {
         contour.push(first); // geschlossen zeichnen
     }
-    let preview_line = solidcraft_render::SceneLine {
-        points: contour,
-        color: solidcraft_render::Rgb(
-            crate::ui::theme::PREVIEW.r(),
-            crate::ui::theme::PREVIEW.g(),
-            crate::ui::theme::PREVIEW.b(),
-        ),
-        alpha: 1.0,
-        width: 2.5,
-        on_top: true,
-    };
+    let color = solidcraft_render::Rgb(
+        crate::ui::theme::PREVIEW.r(),
+        crate::ui::theme::PREVIEW.g(),
+        crate::ui::theme::PREVIEW.b(),
+    );
     let mut lines: Vec<solidcraft_render::SceneLine> = base
         .lines
         .iter()
@@ -419,7 +533,25 @@ pub fn scene_with_shadow_contour(
             on_top: l.on_top,
         })
         .collect();
-    lines.push(preview_line);
+    let push_contour = |lines: &mut Vec<solidcraft_render::SceneLine>, poly: &[[f32; 2]]| {
+        let mut pts: Vec<RcVec3> = poly.iter().map(|p| rc(*p)).collect();
+        if let Some(first) = pts.first().copied() {
+            pts.push(first);
+        }
+        if pts.len() >= 2 {
+            lines.push(solidcraft_render::SceneLine {
+                points: pts,
+                color,
+                alpha: 1.0,
+                width: 1.5,
+                on_top: true,
+            });
+        }
+    };
+    push_contour(&mut lines, &shadow.polygon);
+    for inner in &shadow.inner_polygons {
+        push_contour(&mut lines, inner);
+    }
     solidcraft_render::Scene {
         meshes: base
             .meshes
@@ -531,6 +663,111 @@ fn add_stock_box(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3, c
     let _ = clamp_z;
 }
 
+/// Rohteil-Zylinder (Rundmaterial) als glasiger Körper samt Randlinien:
+/// Achse von `a` nach `b` (auf der Mittellinie), Radius `r`.
+fn add_stock_cylinder(
+    scene: &mut solidcraft_render::Scene,
+    axis: usize,
+    a: Vec3,
+    b: Vec3,
+    r: f32,
+) {
+    const SEGS: u32 = 64;
+    const OPACITY: f32 = 0.28;
+    let rc = |v: Vec3| RcVec3::new(v.x as f64, v.y as f64, v.z as f64);
+    // Ring-Ebene senkrecht zur Achse: (u, v) Basis, axial = (b − a).
+    let (u, v) = match axis {
+        0 => (Vec3::Y, Vec3::Z),
+        1 => (Vec3::X, Vec3::Z),
+        _ => (Vec3::X, Vec3::Y),
+    };
+    let axial = (b - a).normalize();
+
+    let mut mesh = solidcraft_geom::Mesh::default();
+    // Endringe je Segment (radiale Normale) + Deckelmittelpunkte (axial).
+    let ring_at = |end: Vec3| -> Vec<(RcVec3, RcVec3)> {
+        (0..SEGS)
+            .map(|s| {
+                let t = f64::from(s) / f64::from(SEGS) * std::f64::consts::TAU;
+                let (c, s2) = (t.cos() as f32, t.sin() as f32);
+                let pos = end + u * (c * r) + v * (s2 * r);
+                let normal = u * c + v * s2;
+                (rc(pos), rc(normal))
+            })
+            .collect()
+    };
+    let (ring_a, ring_b) = (ring_at(a), ring_at(b));
+    for (pos, normal) in ring_a.iter().chain(ring_b.iter()) {
+        mesh.positions.push(*pos);
+        mesh.normals.push(*normal);
+    }
+    let cap_a = 2 * SEGS;         // Deckelmittelpunkt bei `a`
+    let cap_b = 2 * SEGS + 1;     // Deckelmittelpunkt bei `b`
+    mesh.positions.push(rc(a));
+    mesh.normals.push(rc(-axial));
+    mesh.positions.push(rc(b));
+    mesh.normals.push(rc(axial));
+
+    let mut face = 0_u32;
+    // Mantelflächen: Quads je Segment (mit Wrap beim letzten) + Deckel.
+    for s in 0..SEGS {
+        let s2 = (s + 1) % SEGS;
+        let a1 = s as usize;
+        let a2 = s2 as usize;
+        let b1 = (SEGS + s) as usize;
+        let b2 = (SEGS + s2) as usize;
+        mesh.triangles.push([a1 as u32, b1 as u32, b2 as u32]);
+        mesh.triangles.push([a1 as u32, b2 as u32, a2 as u32]);
+        mesh.tri_face.extend([face; 2]);
+        face += 2;
+        // Deckel je Seite als Dreiecksfächer.
+        mesh.triangles.push([cap_a, a1 as u32, a2 as u32]);
+        mesh.triangles.push([cap_b, b1 as u32, b2 as u32]);
+        mesh.tri_face.extend([face; 2]);
+        face += 2;
+    }
+    scene.meshes.push(SceneMesh {
+        mesh: Arc::new(mesh),
+        color: STOCK_FILL,
+        face_colors: Vec::new(),
+        opacity: OPACITY,
+        closed: false,
+        hatch: solidcraft_render::hatch::Hatch(0),
+    });
+
+    // Randlinien: zwei Endringe (Punkte plus Schaft), dann Achslinien
+    // auf ±u/±v — dieselbe Linienoptik wie die Rohteil-Box-Kanten.
+    let rim = |end: Vec3| -> Vec<RcVec3> {
+        let mut pts = (0..=SEGS)
+            .map(|s| {
+                let t = f64::from(s) / f64::from(SEGS) * std::f64::consts::TAU;
+                end + u * (t.cos() as f32 * r) + v * (t.sin() as f32 * r)
+            })
+            .map(rc)
+            .collect::<Vec<_>>();
+        pts.push(pts[0]); // geschlossen
+        pts
+    };
+    for end in [a, b] {
+        scene.lines.push(solidcraft_render::SceneLine {
+            points: rim(end),
+            color: STOCK_FILL,
+            alpha: 1.0,
+            width: 1.5,
+            on_top: false,
+        });
+    }
+    for dir in [u * r, -u * r, v * r, -v * r] {
+        scene.lines.push(solidcraft_render::SceneLine {
+            points: vec![rc(a + dir), rc(b + dir)],
+            color: STOCK_FILL,
+            alpha: 1.0,
+            width: 1.5,
+            on_top: false,
+        });
+    }
+}
+
 /// Feines Bodenraster auf Z 0 unter dem Bauteil, im SolidCraft-Stil
 /// (feine Nebelinien, kräftigere Hauptlinien alle 100 mm).
 fn add_ground(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3) {
@@ -622,7 +859,7 @@ pub fn demo_scene(
         closed: true,
         hatch: solidcraft_render::hatch::Hatch(0),
     });
-    build_view(scene, mode, show_stock, Vec::new(), stock_params)
+    build_view(scene, mode, show_stock, Vec::new(), stock_params, None)
 }
 
 /// Rohteilnetz (MeshData, pro-Eck-Normalen) in SolidCrafts Mesh-Typ mit
@@ -690,7 +927,7 @@ pub fn render_camera(c: &OrbitCamera) -> RenderCamera {
         // auch nach dem yaw-Kipp schon).
         roll: c.roll as f64,
         distance: c.distance as f64,
-        fov: c.fov_y as f64,
+        fov: c.render_fov() as f64,
         ..Default::default()
     }
 }
@@ -746,6 +983,7 @@ pub fn make_frame(
         pv_key: 0,
         pv_slot: empty(),
         pv_hide: false,
+        preview_bounds: None,
         view_proj: cam
             .view_proj(
                 aspect as f64,
@@ -774,6 +1012,7 @@ pub fn make_frame(
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],
         hatch: Default::default(),
+        moving: None,
     }
 }
 

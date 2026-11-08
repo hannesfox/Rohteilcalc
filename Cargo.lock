@@ -464,9 +464,9 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadmpeg-codec-freecad"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c4a8fa61748cbb3ce80838b00a8cebfe553460583941f5aba6e2b97c16b4d37"
+checksum = "6fe0ed1935ace2c203b87107a064818dec2bb2ec2f250c4ad121767f3da75d1b"
 dependencies = [
  "cadmpeg-container",
  "cadmpeg-core",
@@ -480,9 +480,9 @@ dependencies = [
 
 [[package]]
 name = "cadmpeg-codec-rhino"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7af41440d4c1d69e88e612de02cc3c9bad79d03429531e640ac924fef53c6bf"
+checksum = "7dd2b76bd1d9301c949fbd731fd22cff9d37d10d1f481c754b557c2187bd0171"
 dependencies = [
  "cadmpeg-container",
  "cadmpeg-core",
@@ -499,9 +499,9 @@ dependencies = [
 
 [[package]]
 name = "cadmpeg-codec-step"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35e1b6d17cf26b31f59f2edab8ef5c29d2a33216c581fd913f012ad4869bd559"
+checksum = "f3cbce33ed681a28b62d8b01ae64cca2b01f11f31b9a3e5e2455b9ffde915712"
 dependencies = [
  "base64",
  "cadmpeg-container",
@@ -516,9 +516,9 @@ dependencies = [
 
 [[package]]
 name = "cadmpeg-container"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ab7bcef48ac7480b4917820272d85cd2c9533e17904e15b0e4d22f19a6045bd"
+checksum = "03f0d1c22b875294c5fbf4a4738aec8f8c0a4ad035eb28ece404f1dec21f371a"
 dependencies = [
  "cadmpeg-core",
  "crc32fast",
@@ -528,9 +528,9 @@ dependencies = [
 
 [[package]]
 name = "cadmpeg-core"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e86bb7a40521832504bb1f5953a1c706b2c52aad73bf6d84e1b35e5cb0beae3f"
+checksum = "795bdc6e2a10ecc0627138874c17e2948a3925cd22c6c6b0c2e4f6621d92f89c"
 dependencies = [
  "flate2",
  "memchr",
@@ -543,9 +543,9 @@ dependencies = [
 
 [[package]]
 name = "cadmpeg-ir"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b570a1a8c579e407a9fd7bb10fa1900f8827f1d578b8fcb4ea2a056b5f323c72"
+checksum = "5592036516aaf2574b159a86a3d1ae872dc245261de86e4c0ce6773fed00a249"
 dependencies = [
  "base64",
  "cadmpeg-core",
@@ -558,9 +558,9 @@ dependencies = [
 
 [[package]]
 name = "cadmpeg-registry"
-version = "0.6.3"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b2be23469a9bca0b684f1811118fffb581ebd32ded08e6cc8b0716a41f8c1377"
+checksum = "fc163233d5f664337267192848505854de6aeed4843181adf87f58baddcee9a0"
 dependencies = [
  "cadmpeg-codec-freecad",
  "cadmpeg-codec-rhino",
@@ -3142,6 +3142,7 @@ dependencies = [
  "truck-stepio",
  "truck-topology",
  "wgpu",
+ "windows-sys 0.61.2",
  "winres",
 ]
 
@@ -3562,15 +3563,16 @@ dependencies = [
 [[package]]
 name = "solidcore"
 version = "1.0.1"
-source = "git+https://github.com/tangency-labs/solidcore?rev=8ddce901671f1cebd9214a31d21895d725e886c8#8ddce901671f1cebd9214a31d21895d725e886c8"
+source = "git+https://github.com/tangency-labs/solidcore?rev=a445bdaac60a980b0e9d1dba3ee28eb7ada44f50#a445bdaac60a980b0e9d1dba3ee28eb7ada44f50"
 dependencies = [
+ "serde",
  "thiserror 2.0.21",
 ]
 
 [[package]]
 name = "solidcore-record"
 version = "0.1.0"
-source = "git+https://github.com/tangency-labs/solidcore?rev=f5e8e9a29e0c9b7cf6c4040a5bc8878382b3c62f#f5e8e9a29e0c9b7cf6c4040a5bc8878382b3c62f"
+source = "git+https://github.com/tangency-labs/solidcore?rev=a445bdaac60a980b0e9d1dba3ee28eb7ada44f50#a445bdaac60a980b0e9d1dba3ee28eb7ada44f50"
 dependencies = [
  "serde",
  "serde_json",
@@ -3579,13 +3581,13 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-3dx-client"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 
 [[package]]
 name = "solidcraft-derive"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3594,8 +3596,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-doc"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "log",
  "serde",
@@ -3614,8 +3616,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-engine"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "image",
  "log",
@@ -3638,8 +3640,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-geom"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "serde",
  "solidcore-record",
@@ -3648,8 +3650,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-gpu"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "log",
  "pollster 0.4.0",
@@ -3664,8 +3666,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-io"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "cadmpeg-core",
  "cadmpeg-ir",
@@ -3691,8 +3693,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-kernel"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "log",
  "rayon",
@@ -3710,8 +3712,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-profile"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "serde_json",
  "web-time",
@@ -3719,13 +3721,14 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-render"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "image",
  "moxcms",
  "png",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "solidcore-record",
  "solidcraft-geom",
@@ -3735,8 +3738,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-sketch"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "harfrust",
  "serde",
@@ -3749,8 +3752,8 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-smlib"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "log",
  "serde_json",
@@ -3762,13 +3765,13 @@ dependencies = [
 
 [[package]]
 name = "solidcraft-space-mouse"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 
 [[package]]
 name = "solidcraft-step"
-version = "0.40.0-rc.2"
-source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.2#777f960999cbd256ae8f53b3a042cccd19703ba6"
+version = "0.40.0-rc.3"
+source = "git+https://github.com/tangency-labs/solidcraft?tag=v0.40.0-rc.3#7001949c49e211a430fe4747221589b2b9384f2c"
 dependencies = [
  "solidcore-record",
  "solidcraft-geom",

@@ -45,8 +45,8 @@ impl StandardView {
             StandardView::Back => (std::f32::consts::PI, 0.0),
             StandardView::Left => (-std::f32::consts::FRAC_PI_2, 0.0),
             StandardView::Right => (std::f32::consts::FRAC_PI_2, 0.0),
-            StandardView::Top => (0.0, 1.5533),
-            StandardView::Bottom => (0.0, -1.5533),
+            StandardView::Top => (0.0, std::f32::consts::FRAC_PI_2),
+            StandardView::Bottom => (0.0, -std::f32::consts::FRAC_PI_2),
             StandardView::Iso => (-iso, 0.6155),
         }
     }
@@ -62,6 +62,9 @@ pub struct OrbitCamera {
     pub roll: f32,
     pub distance: f32,
     pub fov_y: f32,
+    /// `false` = orthografische Projektion (SolidCraft: `fov = 0`,
+    /// sichtbare Höhe = 0,4 · distance).
+    pub perspective: bool,
     pub model_center: Vec3,
     pub model_radius: f32,
 }
@@ -75,6 +78,7 @@ impl Default for OrbitCamera {
             roll: 0.0,
             distance: 10.0,
             fov_y: 35f32.to_radians(),
+            perspective: false, // orthografische Ansicht als Standard
             model_center: Vec3::ZERO,
             model_radius: 1.0,
         }
@@ -89,8 +93,49 @@ impl OrbitCamera {
         self.distance = self.fit_distance();
     }
 
+    /// Sichtbarer Vertikalmaßstab wie in SolidCraft: bei Perspektive
+    /// `distance · tan(fov/2)`, orthografisch fest `0,4 · distance`.
+    pub fn half_height(&self) -> f32 {
+        if self.perspective {
+            self.distance * (self.fov_y * 0.5).tan()
+        } else {
+            self.distance * 0.4
+        }
+    }
+
+    /// FOV für die Renderkamera (0 = orthografisch, wie SolidCraft).
+    pub fn render_fov(&self) -> f32 {
+        if self.perspective {
+            self.fov_y
+        } else {
+            0.0
+        }
+    }
+
+    /// Nachführen, wenn `perspective` extern (UI) umgeschaltet wurde:
+    /// die sichtbare Modellhöhe bleibt gleich (wie SolidCrafts Ortho-Umschalter).
+    /// `was` = Modus vor dem Umschalten.
+    pub fn projection_adjust_distance(&mut self, was_perspective: bool) {
+        let h = if was_perspective {
+            self.distance * (self.fov_y * 0.5).tan()
+        } else {
+            self.distance * 0.4
+        };
+        self.distance = if self.perspective {
+            h / (self.fov_y * 0.5).tan()
+        } else {
+            h / 0.4
+        };
+    }
+
     pub fn fit_distance(&self) -> f32 {
-        (self.model_radius / (self.fov_y * 0.5).sin()).max(self.model_radius * 0.25) * 1.10
+        // Fit wie SolidCraft (`Camera::fit`): Perspektive über den
+        // Sichtkegel, Ortho konstant 0,4 · r · 1,15.
+        if self.perspective {
+            (self.model_radius / (self.fov_y * 0.5).sin()).max(self.model_radius * 0.25) * 1.10
+        } else {
+            self.model_radius / 0.4 * 1.15
+        }
     }
 
     pub fn fit_view(&mut self) {
@@ -141,8 +186,9 @@ impl OrbitCamera {
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {
+        let max_pitch = std::f32::consts::FRAC_PI_2 - 0.001;
         self.yaw -= dx * 0.008;
-        self.pitch = (self.pitch + dy * 0.008).clamp(-1.5533, 1.5533);
+        self.pitch = (self.pitch + dy * 0.008).clamp(-max_pitch, max_pitch);
     }
 
     /// Kantung des Bilds um `radians` (Roll um die Blickachse), wie in
@@ -171,8 +217,7 @@ impl OrbitCamera {
         let (s, c) = self.roll.sin_cos();
         let screen_right = right * c + up * s;
         let screen_up = up * c - right * s;
-        let world_per_pixel =
-            2.0 * self.distance * (self.fov_y * 0.5).tan() / viewport_height.max(1.0);
+        let world_per_pixel = 2.0 * self.half_height() / viewport_height.max(1.0);
         self.target += (-screen_right * dx + screen_up * dy) * world_per_pixel;
     }
 
