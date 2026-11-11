@@ -10,14 +10,16 @@ use eframe::egui::{self, Align2, FontId, Frame, Margin, Pos2, RichText, Ui, Vec2
 
 use super::{theme, widgets};
 
-/// Alle Ansichts-Buttons, in fester Reihenfolge.
-/// Tastenkürzel je Standardansicht (None = nur Schaltfläche).
-fn hotkey(view: StandardView) -> Option<egui::Key> {
+/// Ziffer des Numpad-Kürzels (mit Umschalt) je Standardansicht (None = nur
+/// Schaltfläche). Schema wie am Ziffernblock: 2 = vorne, 8 = hinten,
+/// 4 = links, 6 = rechts, 5 = Iso, Ecken 1/3/7/9.
+fn hotkey_digit(view: StandardView) -> Option<char> {
     match view {
-        StandardView::Front => Some(egui::Key::Num1),
-        StandardView::Top => Some(egui::Key::Num2),
-        StandardView::Right => Some(egui::Key::Num3),
-        StandardView::Iso => Some(egui::Key::Num4),
+        StandardView::Front => Some('2'),
+        StandardView::Back => Some('8'),
+        StandardView::Left => Some('4'),
+        StandardView::Right => Some('6'),
+        StandardView::Iso => Some('5'),
         _ => None,
     }
 }
@@ -34,8 +36,8 @@ pub(crate) fn toolbar(app: &mut AppState, ui: &mut Ui) {
                 for view in StandardView::ALL {
                     let label = view.label();
                     let mut tooltip = label.to_string();
-                    if let Some(key) = hotkey(view) {
-                        tooltip.push_str(&format!("  (Taste {key:?})"));
+                    if let Some(digit) = hotkey_digit(view) {
+                        tooltip.push_str(&format!("  (Umschalt+{digit})"));
                     }
                     let selected = active == Some(view);
                     let text =
@@ -82,7 +84,9 @@ pub(crate) fn toolbar(app: &mut AppState, ui: &mut Ui) {
         .on_hover_cursor(egui::CursorIcon::Default);
 }
 
-/// Legende unten links: orange = Rohteil, dunkel = Bauteil, rot = Z-Null.
+/// Legende unten rechts im Darstellungsfenster: orange = Rohteil,
+/// dunkel = Bauteil, rot = Z-Null. (Unten links liegt der Achsen-Kompass;
+/// unten rechts bleibt beim Verkleinern des Fensters frei.)
 pub(crate) fn legend(ui: &mut Ui) {
     Frame::new()
         .fill(theme::BG.gamma_multiply(0.55))
@@ -142,8 +146,8 @@ pub(crate) fn axes_gizmo(ui: &mut Ui, rect: egui::Rect, cam: &RenderCamera) {
         .circle_filled(anchor, 2.5, theme::AXIS_ORIGIN);
 }
 
-/// Fügt alle Viewport-Overlays in das 3D-Fenster ein (Kompass bleibt
-/// unten links, Legende darüber, Leiste oben rechts).
+/// Fügt alle Viewport-Overlays in das 3D-Fenster ein (Kompass unten links,
+/// Legende unten rechts, Leiste oben rechts).
 pub(crate) fn show(app: &mut AppState, ui: &mut Ui, cam: &RenderCamera) {
     let rect = ui.max_rect();
     // Ansichten-Leiste oben rechts.
@@ -151,9 +155,10 @@ pub(crate) fn show(app: &mut AppState, ui: &mut Ui, cam: &RenderCamera) {
         .anchor(Align2::RIGHT_TOP, [-8.0, 8.0])
         .order(egui::Order::Middle)
         .show(ui.ctx(), |ui| toolbar(app, ui));
-    // Legende über dem Kompass unten links.
+    // Legende unten rechts im Darstellungsfenster (Kompass bleibt unten
+    // links); beim Verkleinern kollidiert sie nicht mehr mit der Sidebar.
     egui::Area::new(egui::Id::new("legend"))
-        .anchor(Align2::LEFT_BOTTOM, [10.0, -108.0])
+        .anchor(Align2::RIGHT_BOTTOM, [-10.0, -8.0])
         .order(egui::Order::Middle)
         .show(ui.ctx(), legend);
     axes_gizmo(ui, rect, cam);

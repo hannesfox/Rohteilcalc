@@ -4,6 +4,12 @@
 use crate::mesh::{build_feature_edges, compute_corner_normals, MeshData};
 use glam::{Mat3, Vec3};
 
+/// Wie viel Volumen-Ersparnis (relativ) die Volumen-Optimierung erzielen
+/// muss, damit die Datei-Orientierung (Design-Lage: gerade Kanten
+/// achsenparallel) verlassen wird. Darunter bleibt das Bauteil in der
+/// Datei-Lage, damit es nicht schräg im Rohteil sitzt.
+const FILE_ORIENTATION_TOLERANCE: f32 = 0.05;
+
 #[derive(Clone, Debug)]
 pub struct StockResult {
     /// [Länge (X), Breite (Y), Höhe (Z)] des ausgerichteten Bauteils.
@@ -337,6 +343,171 @@ fn compute_alignment_refined(vertices: &[Vec3]) -> (Alignment, Vec3) {
     alignment_from_candidates(vertices, &candidates, true)
 }
 
+/// Box-Volumen des Rahmens (Spalten von `r` = Rahmenachsen) über `sample`.
+fn frame_volume(sample: &[Vec3], r: &Mat3) -> f32 {
+    let rt = r.transpose();
+    let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for v in sample {
+        let p = rt * *v;
+        mn = mn.min(p);
+        mx = mx.max(p);
+    }
+    let e = mx - mn;
+    e.x * e.y * e.z
+}
+
+/// Drehung des Rahmens um seine eigene `axis`-Achse: die beiden anderen
+/// Rahmenachsen werden in ihrer gemeinsamen Ebene um `angle` gedreht
+/// (Orthonormalität und Rechtshändigkeit bleiben erhalten).
+fn rotate_frame(r: &Mat3, axis: usize, angle: f32) -> Mat3 {
+    let (i, j) = match axis {
+        0 => (1usize, 2usize),
+        1 => (2usize, 0usize),
+        _ => (0usize, 1usize),
+    };
+    let cols = [r.x_axis, r.y_axis, r.z_axis];
+    let a = cols[i];
+    let b = cols[j];
+    let (s, c) = angle.sin_cos();
+    let mut out = cols;
+    out[i] = a * c + b * s;
+    out[j] = b * c - a * s;
+    Mat3::from_cols(out[0], out[1], out[2])
+}
+
+/// Koordinatenabstieg: Rahmen schrittweise so drehen, dass das Box-Volumen
+/// schrumpft. Grobe Schritte zuerst (fängt große Verbesserungen), dann
+/// feine. Liefert den besten gefundenen Rahmen und sein Volumen.
+pub(crate) fn refine_frame(sample: &[Vec3], mut r: Mat3) -> (Mat3, f32) {
+    let mut best_vol = frame_volume(sample, &r);
+    for &step in &[
+        15.0_f32.to_radians(),
+        5.0_f32.to_radians(),
+        2.0_f32.to_radians(),
+        1.0_f32.to_radians(),
+        0.5_f32.to_radians(),
+        0.25_f32.to_radians(),
+    ] {
+        for _sweep in 0..8 {
+            let mut improved = false;
+            for axis in 0..3 {
+                for &dir in &[-1.0_f32, 1.0] {
+                    let cand = rotate_frame(&r, axis, dir * step);
+                    let vol = frame_volume(sample, &cand);
+                    if vol < best_vol * (1.0 - 1e-4) {
+                        best_vol = vol;
+                        r = cand;
+                        improved = true;
+                    }
+                }
+            }
+            if !improved {
+                break;
+            }
+        }
+    }
+    (r, best_vol)
+}
+
+/// Begradigung: die dominante Gerade des Teils (z. B. der Schaft eines
+/// Hebels — PCA der Spitzen-Region) exakt auf die Box-Langsachse legen und
+/// nur noch um diese Achse drehen (Jig-Suche). Bei gebogenen Teilen kostet
+/// die Volumen-Optimierung oft nur wenige Promille, lasst den Schaft aber
+/// merklich schräg liegen (z. B. 15°) — dieser Pass richtet ihn auf, wenn
+/// das Volumen kaum schlechter bleibt. Die Entscheidung übernimmt der
+/// Aufrufer über eine Volumen-Toleranz.
+fn straighten_frame(sample: &[Vec3], frame: Mat3) -> Option<(Mat3, f32)> {
+    // Die Längsachse ist die mit der größten Ausdehnung — der Aufrufer-
+    // Rahmen ist noch unsortiert (Sortierung „längste -> X" passiert erst
+    // danach), deshalb hier selbst sortieren.
+    let mut exts: [(f32, usize); 3] = [(0.0, 0), (0.0, 1), (0.0, 2)];
+    for (i, (e, _)) in exts.iter_mut().enumerate() {
+        let (mut mn, mut mx) = (f32::MAX, f32::MIN);
+        for v in sample {
+            let s = v.dot(frame.col(i));
+            mn = mn.min(s);
+            mx = mx.max(s);
+        }
+        *e = mx - mn;
+    }
+    exts.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    let cols = [frame.x_axis, frame.y_axis, frame.z_axis];
+    let frame = Mat3::from_cols(cols[exts[0].1], cols[exts[1].1], cols[exts[2].1]);
+    let rt = frame.transpose();
+    // Spitzen-Region: hinteres Viertel entlang der Rahmen-Langsachse.
+    let mut proj: Vec<(f32, Vec3)> = sample
+        .iter()
+        .map(|v| {
+            let p = rt * *v;
+            (p.x, p)
+        })
+        .collect();
+    proj.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let tail = &proj[proj.len() * 3 / 4..];
+    if tail.len() < 8 {
+        return None;
+    }
+    let tc = tail.iter().fold(Vec3::ZERO, |a, &(_, v)| a + v) / tail.len() as f32;
+    let mut cov = Mat3::ZERO;
+    for &(_, v) in tail {
+        let p = v - tc;
+        cov.x_axis += Vec3::new(p.x * p.x, p.x * p.y, p.x * p.z);
+        cov.y_axis += Vec3::new(p.y * p.x, p.y * p.y, p.y * p.z);
+        cov.z_axis += Vec3::new(p.z * p.x, p.z * p.y, p.z * p.z);
+    }
+    cov /= tail.len() as f32;
+    let ev = eigen_symmetric(cov);
+    let mut d = ev[0].normalize_or_zero();
+    // `d` liegt im ausgerichteten Raum (die PCA lief über die projizierten
+    // Punkte) — für den Welt-Raum-Rahmen zurück transformieren.
+    d = frame * d;
+    if d.length_squared() < 0.5 {
+        return None;
+    }
+    // Vorzeichen so, dass die neue X-Achse in Richtung der alten zeigt.
+    if d.dot(frame.x_axis) < 0.0 {
+        d = -d;
+    }
+    // Orthonormales Querpaa aus dem bestehenden Rahmen.
+    let y0 = (frame.y_axis - d * d.dot(frame.y_axis)).normalize_or_zero();
+    if y0.length_squared() < 0.5 {
+        return None;
+    }
+    let z0 = d.cross(y0).normalize();
+    let vol_at = |theta: f32| -> f32 {
+        let (s, c) = theta.sin_cos();
+        let y = y0 * c + z0 * s;
+        let z = z0 * c - y0 * s;
+        frame_volume(sample, &Mat3::from_cols(d, y, z))
+    };
+    // Jig-Winkel suchen: grob 0..90° in 5°-Schritten, dann fein.
+    let mut best_theta = 0.0_f32;
+    let mut best_vol = vol_at(0.0);
+    for i in 1..19 {
+        let theta = i as f32 * 5.0_f32.to_radians();
+        let v = vol_at(theta);
+        if v < best_vol {
+            best_vol = v;
+            best_theta = theta;
+        }
+    }
+    for &fine in &[1.0_f32, 0.1_f32] {
+        let base = best_theta;
+        for k in -5..=5 {
+            let theta = base + k as f32 * fine.to_radians();
+            let v = vol_at(theta);
+            if v < best_vol {
+                best_vol = v;
+                best_theta = theta;
+            }
+        }
+    }
+    let (s, c) = best_theta.sin_cos();
+    let y = y0 * c + z0 * s;
+    let z = z0 * c - y0 * s;
+    Some((Mat3::from_cols(d, y, z), best_vol))
+}
+
 /// Bestes Achsen-Tripel nach Kanten-Volumen suchen und daraus die
 /// Ausrichtung bauen: Längste -> X, mittlere -> Y, kürzeste -> Z
 /// (rechtshändiger Rahmen; Nullpunkt an der Unterkante, bei
@@ -360,6 +531,10 @@ fn alignment_from_candidates(
     }
     let mut best_extents = bb_max - bb_min;
     let mut best_axes = (Vec3::X, Vec3::Y, Vec3::Z);
+    // Volumen der Datei-Orientierung (achsenparallele Box ohne Drehung).
+    let file_vol = best_extents.x * best_extents.y * best_extents.z;
+    // Alle geprüften Rahmen (für die Verfeinerungs-Startpunkte).
+    let mut tried: Vec<(f32, Mat3)> = Vec::new();
 
     for &ax in candidates {
         if ax.length_squared() < 0.1 {
@@ -382,11 +557,79 @@ fn alignment_from_candidates(
                 max_b = max_b.max(proj);
             }
             let ext = max_b - min_b;
+            tried.push((ext.x * ext.y * ext.z, Mat3::from_cols(ax, ay_ortho, az)));
             if (ext.x * ext.y * ext.z) < (best_extents.x * best_extents.y * best_extents.z) {
                 best_extents = ext;
                 best_axes = (ax, ay_ortho, az);
             }
         }
+    }
+
+    // Engere Rahmen suchen: bei freiformigen Teilen (keine ebenen Flächen,
+    // schräge Hauptachsen) trifft die Kandidatenliste die engste Box oft
+    // nicht. Koordinatenabstieg von den besten Kandidaten — kleine Drehungen
+    // um die Rahmenachsen, solange das Box-Volumen schrumpft. Der Legacy-
+    // Pfad (frozen Regression) bleibt unverändert.
+    if center_xy {
+        // Stichprobe bei sehr vielen Punkten — die Entscheidung braucht
+        // keine volle Punktwolke (Genauigkeit ~0,1 % reicht).
+        let sample_vec: Vec<Vec3>;
+        let sample: &[Vec3] = if vertices.len() > 20_000 {
+            sample_vec = vertices
+                .iter()
+                .step_by(vertices.len() / 20_000 + 1)
+                .copied()
+                .collect();
+            &sample_vec
+        } else {
+            vertices
+        };
+        let mut best_vol = best_extents.x * best_extents.y * best_extents.z;
+        let mut best_frame = Mat3::from_cols(best_axes.0, best_axes.1, best_axes.2);
+        // Startpunkte: achsenparalleler Rahmen + die drei engsten Kandidaten.
+        let mut starts: Vec<Mat3> = vec![Mat3::IDENTITY];
+        tried.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for (_, f) in tried.iter().take(3) {
+            starts.push(*f);
+        }
+        for start in starts {
+            let (refined, vol) = refine_frame(sample, start);
+            if vol < best_vol * (1.0 - 1e-4) {
+                best_vol = vol;
+                best_frame = refined;
+            }
+        }
+        // Begradigung: gebogene Teile (Hebel &c.) bekommen oft einen merklich
+        // schrägen Schaft, weil der Volumenunterschied nur Promille beträgt.
+        // Die dominante Gerade auf die Langsachse legen, wenn das Volumen
+        // höchstens ~1,5 % schlechter ist.
+        if let Some((straight, svol)) = straighten_frame(sample, best_frame) {
+            if svol <= best_vol * 1.015 {
+                best_vol = svol;
+                best_frame = straight;
+            }
+        }
+        // Datei-Orientierung bevorzugen: CAD-Dateien speichern Teile in
+        // ihrer Entwurfs-Lage — gerade Kanten achsenparallel, Auflageflächen
+        // unten. Die Volumen-Optimierung dreht solche Teile gern schräg,
+        // um wenige Prozent Box-Volumen zu sparen (z. B. ebene Blechteile,
+        // deren lange Kanten sich über Eck legen). Sparvorteil unter der
+        // Toleranz ⇒ zurück zur Datei-Lage, damit das Bauteil nicht schräg
+        // im Rohteil sitzt. Echte Einsparungen (Freiformteile, test4: ~25 %)
+        // behalten die engste Box.
+        if file_vol <= best_vol * (1.0 + FILE_ORIENTATION_TOLERANCE) {
+            best_frame = Mat3::IDENTITY;
+        }
+        // Ausdehnung im verfeinerten Rahmen nachmessen.
+        let rt = best_frame.transpose();
+        let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for v in vertices {
+            let p = rt * *v;
+            mn = mn.min(p);
+            mx = mx.max(p);
+        }
+        best_extents = mx - mn;
+        best_axes = (best_frame.x_axis, best_frame.y_axis, best_frame.z_axis);
     }
 
     // Längste -> X, mittlere -> Y, kürzeste -> Z
@@ -557,7 +800,7 @@ pub fn alignment_with_down(vertices: &[Vec3], down: Vec3) -> Option<(Alignment, 
 /// (Jacobi-Rotationen: deterministisch, keine Panik, genug siebt, um
 /// Mesh-Kovarianzen zu diagonalisieren). Die Vektoren sind nach Eigenwert
 /// absteigend geordnet und normalisiert — die eigentlichen Hauptachsen.
-fn eigen_symmetric(cov: Mat3) -> [Vec3; 3] {
+pub(crate) fn eigen_symmetric(cov: Mat3) -> [Vec3; 3] {
     let mut m = [
         [cov.x_axis.x, cov.x_axis.y, cov.x_axis.z],
         [cov.y_axis.x, cov.y_axis.y, cov.y_axis.z],

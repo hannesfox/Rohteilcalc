@@ -2,7 +2,9 @@
 
 use glam::{Mat4, Vec3};
 
-/// Standard-Kamerapositionen (Z ist die Bauteilhöhe).
+/// Standard-Kamerapositionen (Z ist die Bauteilhöhe). Zusätzlich zu den
+/// sechs Hauptansichten gibt es die vier Eckansichten (Numpad 1/3/7/9,
+/// flacher geneigt als die Iso-Ansicht).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StandardView {
     Front,
@@ -12,6 +14,10 @@ pub enum StandardView {
     Top,
     Bottom,
     Iso,
+    FrontLeft,
+    FrontRight,
+    BackLeft,
+    BackRight,
 }
 
 impl StandardView {
@@ -24,6 +30,10 @@ impl StandardView {
             StandardView::Top => "Oben",
             StandardView::Bottom => "Unten",
             StandardView::Iso => "Iso",
+            StandardView::FrontLeft => "Vorne links",
+            StandardView::FrontRight => "Vorne rechts",
+            StandardView::BackLeft => "Hinten links",
+            StandardView::BackRight => "Hinten rechts",
         }
     }
 
@@ -40,6 +50,9 @@ impl StandardView {
     /// (yaw, pitch) in Radiant.
     pub fn angles(self) -> (f32, f32) {
         let iso = std::f32::consts::FRAC_PI_4;
+        // Eckansichten: gleicher 45°-Drehsatz wie Iso, aber flacher geneigt
+        // (20° statt 35°), damit sie sich von der Iso-Ansicht unterscheiden.
+        let corner = 0.35_f32;
         match self {
             StandardView::Front => (0.0, 0.0),
             StandardView::Back => (std::f32::consts::PI, 0.0),
@@ -48,6 +61,10 @@ impl StandardView {
             StandardView::Top => (0.0, std::f32::consts::FRAC_PI_2),
             StandardView::Bottom => (0.0, -std::f32::consts::FRAC_PI_2),
             StandardView::Iso => (-iso, 0.6155),
+            StandardView::FrontLeft => (-iso, corner),
+            StandardView::FrontRight => (iso, corner),
+            StandardView::BackLeft => (-3.0 * iso, corner),
+            StandardView::BackRight => (3.0 * iso, corner),
         }
     }
 }

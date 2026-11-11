@@ -959,27 +959,49 @@ impl eframe::App for AppState {
         }
 
         // Tastaturkürzel (wie in CAD-Programmen) — auch die Hervorhebung im
-        // Ansichten-Overlay folgt mit.
+        // Ansichten-Overlay folgt mit. Numpad-Schema mit Umschalt (Shift):
+        // 2 = vorne, 8 = hinten, 4 = links, 6 = rechts, 5 = Iso;
+        // Ecken: 1 = vorne links, 3 = vorne rechts, 7 = hinten links,
+        // 9 = hinten rechts.
         ctx.input(|i| {
             if i.key_pressed(egui::Key::F) {
                 self.camera.fit_view();
                 self.active_view = None;
             }
-            if i.key_pressed(egui::Key::Num1) {
-                self.camera.set_standard_view(StandardView::Front);
-                self.active_view = Some(StandardView::Front);
-            }
-            if i.key_pressed(egui::Key::Num2) {
-                self.camera.set_standard_view(StandardView::Top);
-                self.active_view = Some(StandardView::Top);
-            }
-            if i.key_pressed(egui::Key::Num3) {
-                self.camera.set_standard_view(StandardView::Right);
-                self.active_view = Some(StandardView::Right);
-            }
-            if i.key_pressed(egui::Key::Num4) {
-                self.camera.set_standard_view(StandardView::Iso);
-                self.active_view = Some(StandardView::Iso);
+            let view_for = |key: egui::Key| -> Option<StandardView> {
+                if !i.modifiers.shift {
+                    return None;
+                }
+                match key {
+                    egui::Key::Num1 => Some(StandardView::FrontLeft),
+                    egui::Key::Num2 => Some(StandardView::Front),
+                    egui::Key::Num3 => Some(StandardView::FrontRight),
+                    egui::Key::Num4 => Some(StandardView::Left),
+                    egui::Key::Num5 => Some(StandardView::Iso),
+                    egui::Key::Num6 => Some(StandardView::Right),
+                    egui::Key::Num7 => Some(StandardView::BackLeft),
+                    egui::Key::Num8 => Some(StandardView::Back),
+                    egui::Key::Num9 => Some(StandardView::BackRight),
+                    _ => None,
+                }
+            };
+            for key in [
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
+            ] {
+                if i.key_pressed(key) {
+                    if let Some(view) = view_for(key) {
+                        self.camera.set_standard_view(view);
+                        self.active_view = Some(view);
+                    }
+                }
             }
         });
 
