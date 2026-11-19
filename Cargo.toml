@@ -1,0 +1,61 @@
+[package]
+name = "rohteil_calc"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+winres = "0.1" # Windows-Icon aus assets/icon.ico einbetten
+
+[dependencies]
+eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts"] }
+egui = "0.36"
+egui-wgpu = "0.36"
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal"] }
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.27"
+rfd = "0.14" # Nativer Dateidialog zum Laden von STEP-Dateien
+pollster = "0.4" # Headless-GPU-Rendering (--render)
+
+# SolidCraft: STEP-Import (engine), Szene (render) und Viewport-Pipelines
+# (gpu) genau wie im SolidCraft-Viewport. Git-Abhängigkeiten auf das
+# öffentliche SolidCraft-Repo (MIT OR Apache-2.0), gepinnt auf das Tag,
+# das die lokale Entwicklungslinie ist (0.40.0-rc.3) — für builds,
+# die auf jeder Maschine (auch CI) funktionieren.
+solidcraft-geom = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.3" }
+solidcraft-engine = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.3" }
+solidcraft-render = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.3" }
+solidcraft-gpu = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.3" }
+# Datentypen (Vec3) der B-rep-Records — dieselbe Revision, die SolidCraft
+# rc.3 selbst pinnt, damit die Typen zu den Git-Crates passen.
+solidcore-record = { git = "https://github.com/tangency-labs/solidcore", rev = "a445bdaac60a980b0e9d1dba3ee28eb7ada44f50" }
+serde_json = "1"
+
+# 3D-Maus (SpaceMouse): HID-Report-Auslesen (descriptor/layout) und der
+# Client der 3Dconnexion-Drivers (macOS, 3DxWare) — dieselben Crates wie in
+# SolidCraft. hidapi liest das Gerät selbst.
+solidcraft-space-mouse = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.3" }
+solidcraft-3dx-client = { git = "https://github.com/tangency-labs/solidcraft", tag = "v0.40.0-rc.3" }
+hidapi = { version = "2.6.7", default-features = false, features = ["macos-shared-device"] }
+
+# Legacy-Pipeline (truck/Analytik-Mesher, für tests/t2_new.rs): wird von der
+# SolidCraft-Ansicht nicht mehr benutzt.
+truck-stepio = "0.3"
+truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
+truck-topology = "0.6"
+spade = { version = "2.15", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+# Für die Debug-Beispiele (probe.rs)
+ruststep = "0.4.0"
+
+# Windows: 3D-Maus — hidapi über die native Windows-Variante (Geräte-Amesuche
+# bleibt aus, s. src/space_mouse/windows_hid.rs), windows-sys nur für die
+# Plug-and-Play-Suche der 3D-Maus-Interfaces (Configuration-Manager-APIs).
+[target.'cfg(target_os = "windows")'.dependencies]
+hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Devices_HumanInterfaceDevice",
+    "Win32_Devices_Properties",
+    "Win32_Foundation",
+] }
