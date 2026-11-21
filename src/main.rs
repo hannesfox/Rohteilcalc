@@ -8,6 +8,12 @@
 //! - [`stock`]    Ausrichtung und Rohteilregeln
 //! - [`camera`]   Orbit-Kamera mit Standardansichten
 //! - [`app`]      egui-Oberfläche und asynchrones Laden
+
+// Ohne eingebautes Konsolen-Subsystem (erst ab Windows-Release, d. h. der
+// CI-Build): Doppelklick startet dann wirklich still. Der Testrunner und
+// Debug-Builds behalten das Konsolen-Fenster.
+#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod camera;
 mod mesh;
@@ -30,7 +36,19 @@ use renderer::{ScSession, ViewMode};
 use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result<()> {
+    // Mit dem Eltern-Terminal verbinden (nur Windows-Release, also ohne
+    // eingebautes Konsolen-Subsystem): Der Aufrufer sieht dann die Ausgaben
+    // der CLI-Modi (`--inspect`, `--render`, `--space-probe`) wieder, z. B.
+    // `Rohteilcalc.exe --inspect datei.step` aus PowerShell.
+    #[cfg(all(target_os = "windows", not(debug_assertions)))]
+    unsafe {
+        windows_sys::Win32::System::Console::AttachConsole(
+            windows_sys::Win32::System::Console::ATTACH_PARENT_PROCESS,
+        );
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
+    install_startup_panic_hook(is_cli_mode(&args));
 
     // Achsen-Sonde der 3D-Maus: `--space-probe` (20 s) zeigt die sechs
     // Rohachsen live, so dass man sieht, welcher Kanal auf welche Richtung
@@ -114,19 +132,84 @@ fn main() -> eframe::Result<()> {
             .with_title("RohteilCalc"),
         renderer: eframe::Renderer::Wgpu,
         multisampling: 1, // MSAA passiert im Offscreen-Ziel des Viewports
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
-    eframe::run_native(
+    let result = eframe::run_native(
         "RohteilCalc",
         options,
         Box::new(move |cc| {
             if let Err(e) = renderer::install(cc) {
                 eprintln!("Warnung: GPU-Pipelines nicht installiert: {e}");
+                show_startup_error(&e.to_string());
             }
             Ok(Box::new(AppState::new(cc, initial)))
         }),
+    );
+    if let Err(e) = &result {
+        eprintln!("RohteilCalc konnte nicht starten: {e}");
+        show_startup_error(&e.to_string());
+    }
+    result
+}
+
+/// Einstellungen für egui-wgpu: auf Windows DXC neben dem .exe nutzen, wenn
+/// ein `dxcompiler.dll` dort liegt, sonst FXC (`solidcraft_gpu::dx12_compiler`)
+/// — nicht wgpu's `Auto`, das ein fremdes `dxcompiler.dll` aus PATH lädt und
+/// den Start bei Obsidian/NVIDIA-SDK-Manager-Ordnern kaputtgab.
+fn wgpu_options() -> egui_wgpu::WgpuConfiguration {
+    let mut options = egui_wgpu::WgpuConfiguration::default();
+    if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup {
+        setup.instance_descriptor.backend_options.dx12.shader_compiler =
+            solidcraft_gpu::dx12_compiler();
+    }
+    options
+}
+
+/// Kleiner Start-Fehler-Dialog für den Fall, dass eframe nichts mehr melden
+/// kann, da Windows ohne Konsolen-Subsystem nichts einrichtet. Kurz halten.
+fn show_startup_error(message: &str) {
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("RohteilCalc konnte nicht starten")
+        .set_description(format!(
+            "{message}\n\nTipp: Mit der Umgebungsvariable WGPU_BACKEND=vulkan \
+             (oder gl) bzw. WGPU_DX12_COMPILER=fxc lässt sich die \
+             Grafikanbindung wechseln."
+        ))
+        .show();
+}
+
+/// True, wenn ein Headless-CLI-Modus läuft (`--inspect`, `--render`,
+/// `--space-probe`). Diese melden sich bei Fehlern im Terminal, nicht per
+/// Dialog — und nutzen ihn auch bei Panics.
+fn is_cli_mode(args: &[String]) -> bool {
+    matches!(
+        args.first().map(String::as_str),
+        Some("--inspect") | Some("--render") | Some("--space-probe")
     )
 }
+
+/// Panics auf dem Haupt-Thread in Windows-Release als Dialog anzeigen
+/// (ohne Konsolen-Subsystem sind `eprintln!`-Meldungen nichts mehr). Der
+/// Hook überprüft ausdrücklich den thread-name `main`: Panics in
+/// Worker-Threads (z. B. dem STEP-Loader in `app.rs`, der sie per
+/// `catch_unwind` abfängt) melden sich im Terminal. Im Anschluss der
+/// Standard-Hook aufgerufen.
+#[cfg(all(target_os = "windows", not(debug_assertions)))]
+fn install_startup_panic_hook(cli_mode: bool) {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if !cli_mode && std::thread::current().name() == Some("main") {
+            show_startup_error(&info.to_string());
+        }
+        default_hook(info);
+    }));
+}
+
+/// Panik-Dialog nur unter Windows-Release; sonst kein-Op.
+#[cfg(not(all(target_os = "windows", not(debug_assertions))))]
+fn install_startup_panic_hook(_cli_mode: bool) {}
 
 // ---------------------------------------------------------
 // Headless-Befehle (--inspect, --render) über die SolidCraft-Pipelines.
@@ -242,6 +325,7 @@ fn space_probe() {
             .with_inner_size([460.0, 340.0])
             .with_title("3D-Maus-Sonde"),
         renderer: eframe::Renderer::Wgpu,
+        wgpu_options: wgpu_options(),
         ..Default::default()
     };
     let peaks = std::sync::Arc::new(std::sync::Mutex::new([0_i16; 6]));
