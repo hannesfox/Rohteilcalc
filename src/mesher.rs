@@ -86,7 +86,8 @@ impl Map {
     /// Baut die Abbildung. Liefert zusätzlich die Orientierung der
     /// truck-Processor-Surface (nötig für die Winding-Entscheidung).
     /// `None`, wenn die Fläche ungeeignet oder entartet ist.
-    fn from_surface(surface: &Surface) -> Option<(Map, bool)> {        let Surface::ElementarySurface(elementary) = surface else {
+    fn from_surface(surface: &Surface) -> Option<(Map, bool)> {
+        let Surface::ElementarySurface(elementary) = surface else {
             dbg_none!("keine ElementarySurface");
         };
         match elementary.as_ref() {
@@ -107,9 +108,7 @@ impl Map {
         }
     }
 
-    fn revolved(
-        cone: &truck_stepio::r#in::alias::CylindricalSurface,
-    ) -> Option<(Map, bool)> {
+    fn revolved(cone: &truck_stepio::r#in::alias::CylindricalSurface) -> Option<(Map, bool)> {
         let line = *cone.entity().entity_curve();
         let origin = cone.transform().transform_point(cone.entity().origin());
         let axis = cone.transform().transform_vector(cone.entity().axis());
@@ -156,9 +155,7 @@ impl Map {
         ))
     }
 
-    fn toroidal(
-        torus: &truck_stepio::r#in::alias::ToroidalSurface,
-    ) -> Option<(Map, bool)> {
+    fn toroidal(torus: &truck_stepio::r#in::alias::ToroidalSurface) -> Option<(Map, bool)> {
         let t = torus.transform();
         let entity = torus.entity();
         let origin = t.transform_point(entity.center());
@@ -223,7 +220,11 @@ impl Map {
                 v_axis,
             } => {
                 let d = diff(point, *origin);
-                let (aa, ab, bb) = (u_axis.dot(*u_axis), u_axis.dot(*v_axis), v_axis.dot(*v_axis));
+                let (aa, ab, bb) = (
+                    u_axis.dot(*u_axis),
+                    u_axis.dot(*v_axis),
+                    v_axis.dot(*v_axis),
+                );
                 let det = aa * bb - ab * ab;
                 if !det.is_finite() || det.abs() < 1e-24 {
                     return None;
@@ -384,7 +385,9 @@ pub fn tessellate_face(
     for boundary in &face.boundaries {
         let mut loop_pts: Vec<Point3> = Vec::new();
         for edge_idx in boundary {
-            if collect_edge_points(&shell_edges[edge_idx.index], edge_idx, tol, &mut loop_pts).is_none() {
+            if collect_edge_points(&shell_edges[edge_idx.index], edge_idx, tol, &mut loop_pts)
+                .is_none()
+            {
                 dbg_none!("Kante nicht teilbar");
             }
         }
@@ -422,7 +425,8 @@ pub fn tessellate_face(
     //    fortlaufend entfalten, damit volle Windungen als Band erscheinen und
     //    die CDT zusammenhängt.
     let (period_u, period_v) = map.periods();
-    let mut pts3d_aligned: Vec<Vec<Point3>> = loops3d.clone();    let mut loops_uv: Vec<Vec<spade::Point2<f64>>> = Vec::with_capacity(loops3d.len());
+    let mut pts3d_aligned: Vec<Vec<Point3>> = loops3d.clone();
+    let mut loops_uv: Vec<Vec<spade::Point2<f64>>> = Vec::with_capacity(loops3d.len());
     for (li, loop_pts) in loops3d.iter().enumerate() {
         // a) entfaltete Rohparameter je Punkt
         let mut raw: Vec<(f64, f64)> = Vec::with_capacity(loop_pts.len());
@@ -447,21 +451,33 @@ pub fn tessellate_face(
         // fällung kann spiralige UV-Schleifen nicht sauber füllen; truck
         // tregt die Fläche korrekt.
         if let Some(per) = period_u {
-            let span = raw.iter().map(|r| r.0).fold(
-                (f64::INFINITY, f64::NEG_INFINITY),
-                |mn, x| (mn.0.min(x), mn.1.max(x)),
-            );
+            let span = raw
+                .iter()
+                .map(|r| r.0)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |mn, x| {
+                    (mn.0.min(x), mn.1.max(x))
+                });
             if span.1 - span.0 > per + 1e-3 {
-                dbg_none!("u-Schleife mehrfach umwickelt ({:.3}>{:.3})", span.1 - span.0, per);
+                dbg_none!(
+                    "u-Schleife mehrfach umwickelt ({:.3}>{:.3})",
+                    span.1 - span.0,
+                    per
+                );
             }
         }
         if let Some(per) = period_v {
-            let span = raw.iter().map(|r| r.1).fold(
-                (f64::INFINITY, f64::NEG_INFINITY),
-                |mn, x| (mn.0.min(x), mn.1.max(x)),
-            );
+            let span = raw
+                .iter()
+                .map(|r| r.1)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |mn, x| {
+                    (mn.0.min(x), mn.1.max(x))
+                });
             if span.1 - span.0 > per + 1e-3 {
-                dbg_none!("v-Schleife mehrfach umwickelt ({:.3}>{:.3})", span.1 - span.0, per);
+                dbg_none!(
+                    "v-Schleife mehrfach umwickelt ({:.3}>{:.3})",
+                    span.1 - span.0,
+                    per
+                );
             }
         }
         if std::env::var_os("MESHER_DEBUG").is_some() {
@@ -545,22 +561,22 @@ pub fn tessellate_face(
         let tag_ok = want.as_deref().is_none_or(|w| tag == w);
         if tag_ok {
             if let Ok(mut f) = std::fs::File::create(&path) {
-            let _ = writeln!(f, "# loops_uv (skaliert), loops3d, vertices, triangles");
-            for (l3, lu) in pts3d_aligned.iter().zip(loops_uv.iter()) {
-                let _ = writeln!(f, "loop3d");
-                for p in l3 {
-                    let _ = writeln!(f, "p {} {} {}", p.x, p.y, p.z);
+                let _ = writeln!(f, "# loops_uv (skaliert), loops3d, vertices, triangles");
+                for (l3, lu) in pts3d_aligned.iter().zip(loops_uv.iter()) {
+                    let _ = writeln!(f, "loop3d");
+                    for p in l3 {
+                        let _ = writeln!(f, "p {} {} {}", p.x, p.y, p.z);
+                    }
+                    let _ = writeln!(f, "loopuv");
+                    for uv in lu {
+                        let _ = writeln!(f, "uv {} {}", uv.x, uv.y);
+                    }
                 }
-                let _ = writeln!(f, "loopuv");
-                for uv in lu {
-                    let _ = writeln!(f, "uv {} {}", uv.x, uv.y);
+                let _ = writeln!(f, "mesh");
+                for (v, p) in vertices.iter().enumerate() {
+                    let uv = map.params(*p).unwrap_or((f64::NAN, f64::NAN));
+                    let _ = writeln!(f, "v {} {} {} {} {} {}", v, p.x, p.y, p.z, uv.0, uv.1);
                 }
-            }
-            let _ = writeln!(f, "mesh");
-            for (v, p) in vertices.iter().enumerate() {
-                let uv = map.params(*p).unwrap_or((f64::NAN, f64::NAN));
-                let _ = writeln!(f, "v {} {} {} {} {} {}", v, p.x, p.y, p.z, uv.0, uv.1);
-            }
                 for t in &triangles {
                     let _ = writeln!(f, "t {} {} {}", t[0], t[1], t[2]);
                 }
@@ -615,13 +631,7 @@ fn diff(a: Point3, b: Point3) -> Vector3 {
 }
 
 /// Orientierung von `c` relativ zur Geraden a→b (Kreuzprodukt).
-fn orient2d(
-    ax: f64,
-    ay: f64,
-    bx: f64,
-    by: f64,
-    c: &spade::Point2<f64>,
-) -> f64 {
+fn orient2d(ax: f64, ay: f64, bx: f64, by: f64, c: &spade::Point2<f64>) -> f64 {
     (bx - ax) * (c.y - ay) - (by - ay) * (c.x - ax)
 }
 
@@ -663,7 +673,10 @@ fn loops_uv_simple(loops_uv: &[Vec<spade::Point2<f64>>]) -> Result<(), String> {
             // Benachbarte Segmente derselben Schleife teilen legitime Ecken.
             if li == lj
                 && n == nj
-                && (ki + 1 == kj || kj + 1 == ki || (ki == 0 && kj == n - 1) || (kj == 0 && ki == n - 1))
+                && (ki + 1 == kj
+                    || kj + 1 == ki
+                    || (ki == 0 && kj == n - 1)
+                    || (kj == 0 && ki == n - 1))
             {
                 continue;
             }
@@ -732,8 +745,6 @@ fn same_pt(p: &[f64; 2], q: &[f64; 2]) -> bool {
     (p[0] - q[0]).abs() < 1e-12 && (p[1] - q[1]).abs() < 1e-12
 }
 
-
-
 /// Füllt die von den Randschleifen beschränkte Region mit einer
 /// Constrained-Delaunay-Triangulation und hängt Dreiecke/Punkte an.
 ///
@@ -779,7 +790,10 @@ fn triangulate_region(
             let h = match position_index.entry(bits(uv)) {
                 Entry::Occupied(slot) => *slot.get(),
                 Entry::Vacant(slot) => {
-let h = match cdt.insert(*uv) { Ok(h) => h, Err(_) => dbg_none!("CDT-Einfuegespunkt doppelt/ungueltig") };
+                    let h = match cdt.insert(*uv) {
+                        Ok(h) => h,
+                        Err(_) => dbg_none!("CDT-Einfuegespunkt doppelt/ungueltig"),
+                    };
                     slot.insert(h);
                     h
                 }
@@ -895,7 +909,8 @@ let h = match cdt.insert(*uv) { Ok(h) => h, Err(_) => dbg_none!("CDT-Einfuegespu
         .filter(|f| f.vertices().iter().all(|v| within_box(&v.position())))
         .map(|f| {
             let p: [spade::Point2<f64>; 3] = f.vertices().map(|v| v.position());
-            ((p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x)).abs() * 0.5
+            ((p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[1].y - p[0].y) * (p[2].x - p[0].x)).abs()
+                * 0.5
         })
         .sum();
     let mut loop_areas: Vec<f64> = loops_uv
@@ -910,8 +925,8 @@ let h = match cdt.insert(*uv) { Ok(h) => h, Err(_) => dbg_none!("CDT-Einfuegespu
         })
         .collect();
     loop_areas.sort_by(|x, y| y.partial_cmp(x).unwrap_or(std::cmp::Ordering::Equal));
-    let expected = loop_areas.first().copied().unwrap_or(0.0)
-        - loop_areas.iter().skip(1).sum::<f64>();
+    let expected =
+        loop_areas.first().copied().unwrap_or(0.0) - loop_areas.iter().skip(1).sum::<f64>();
     if region_area > expected.max(0.0) * 1.25 + 1e-6 {
         if std::env::var_os("MESHER_DEBUG").is_some() {
             eprintln!(
@@ -952,7 +967,10 @@ let h = match cdt.insert(*uv) { Ok(h) => h, Err(_) => dbg_none!("CDT-Einfuegespu
                 Entry::Vacant(e) => {
                     // Innenknoten exakt auf der Fläche auswerten.
                     let (u, v) = (v.position().x / scales.0, v.position().y / scales.1);
-let p3 = match map.eval(u, v) { Some(q) => q, None => dbg_none!("Inneree Val fehlgeschlagen") };
+                    let p3 = match map.eval(u, v) {
+                        Some(q) => q,
+                        None => dbg_none!("Inneree Val fehlgeschlagen"),
+                    };
                     if !p3.x.is_finite() || !p3.y.is_finite() || !p3.z.is_finite() {
                         dbg_none!("Inneree Punkt nicht endlich");
                     }
@@ -984,12 +1002,19 @@ fn edge_runs(
             let b = loop_handles[(k + 1) % n];
             if a != b {
                 *runs
-                    .entry(if a.index() < b.index() { (a, b) } else { (b, a) })
+                    .entry(if a.index() < b.index() {
+                        (a, b)
+                    } else {
+                        (b, a)
+                    })
                     .or_insert(0) += 1;
             }
         }
     }
-    runs.into_iter().filter(|(_, n)| n % 2 == 0).map(|(e, _)| e).collect()
+    runs.into_iter()
+        .filter(|(_, n)| n % 2 == 0)
+        .map(|(e, _)| e)
+        .collect()
 }
 
 /// Markiert je innerer CDT-Fläche, ob sie von den Randschleifen umschlossen
@@ -1001,7 +1026,11 @@ fn region_of(
     let counts = |e: spade::handles::DirectedEdgeHandle<'_, _, _, _, _>| {
         let [a, b] = e.vertices().map(|v| v.fix());
         e.is_constraint_edge()
-            && !barrier.contains(&if a.index() < b.index() { (a, b) } else { (b, a) })
+            && !barrier.contains(&if a.index() < b.index() {
+                (a, b)
+            } else {
+                (b, a)
+            })
     };
     let mut parity: Vec<Option<bool>> = vec![None; cdt.num_all_faces()];
     let mut todo: Vec<(FixedFaceHandle<InnerTag>, bool)> = Vec::new();

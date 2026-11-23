@@ -37,7 +37,10 @@ struct Reading {
 
 impl Reading {
     fn new(now: Instant) -> Self {
-        Self { axes: [0; 6], at: [now; 6] }
+        Self {
+            axes: [0; 6],
+            at: [now; 6],
+        }
     }
 
     /// Die Achsen bei `now`: jede, deren letzter Wert zu alt ist, liest 0.
@@ -87,7 +90,6 @@ pub struct DeviceMotion {
     pub roll: f32,
     pub seconds: f32,
 }
-
 
 /// Welche körperliche Achse welche logische Dreidmaus-Richtung steuert: die
 /// Achsenzuordnung des 3DxWare-Treibers ohne Profil — sein Objekt-Modus (wie
@@ -153,8 +155,7 @@ impl SpaceMouse {
         if step <= 0.0 {
             return None;
         }
-        let moving = (pan_x, pan_y, zoom, orbit_x, orbit_y, rz)
-            != (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        let moving = (pan_x, pan_y, zoom, orbit_x, orbit_y, rz) != (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
         // WheelGuard (wie SolidCraft): während der Deckel sich bewegt und
         // [`WHEEL_QUIET_S`] danach sind Rad-Ereignisse des Treibers — der
         // sendet sie ab etwa einem Drittel Auslenkung, nie in Ruhe, so dass
@@ -216,7 +217,12 @@ pub fn start(ctx: &egui::Context) -> Option<SpaceMouse> {
         // Clients; die Anwendung meldet sich zusätzlich als einer. Läuft der
         // Helper nicht, liest der HID-Leser oben selbst.
         mod_reader::start_driver_client(ctx, Arc::clone(&shared));
-        return Some(SpaceMouse { shared, last_frame: now, moved_at: None, wheel_is_device: false });
+        return Some(SpaceMouse {
+            shared,
+            last_frame: now,
+            moved_at: None,
+            wheel_is_device: false,
+        });
     }
     #[cfg(target_os = "windows")]
     {
@@ -230,7 +236,12 @@ pub fn start(ctx: &egui::Context) -> Option<SpaceMouse> {
         if let Err(error) = spawned {
             eprintln!("3D-Maus: Leser konnte nicht starten: {error}");
         }
-        return Some(SpaceMouse { shared, last_frame: now, moved_at: None, wheel_is_device: false });
+        return Some(SpaceMouse {
+            shared,
+            last_frame: now,
+            moved_at: None,
+            wheel_is_device: false,
+        });
     }
     #[allow(unreachable_code)]
     {
@@ -320,7 +331,12 @@ mod device_reader {
         let Some(decoded) = layout.decode(report) else {
             return;
         };
-        for ((value, at), new) in dest.axes.iter_mut().zip(dest.at.iter_mut()).zip(decoded.axes) {
+        for ((value, at), new) in dest
+            .axes
+            .iter_mut()
+            .zip(dest.at.iter_mut())
+            .zip(decoded.axes)
+        {
             if let Some(new) = new {
                 *value = new;
                 *at = now;
@@ -399,13 +415,17 @@ mod device_reader {
             let timeout_ms = if candidates.len() == 1 { 100 } else { 10 };
             let mut index = 0;
             while index < candidates.len() {
-                match candidates[index].device.read_timeout(&mut report, timeout_ms) {
+                match candidates[index]
+                    .device
+                    .read_timeout(&mut report, timeout_ms)
+                {
                     Ok(0) => {}
                     Ok(size) => {
                         let bytes = report.get(..size).unwrap_or_default();
                         let now = Instant::now();
                         if shows_use(&candidates[index].layout, bytes) {
-                            let stale = used_at.is_none_or(|used| now.duration_since(used) >= STALE_AFTER);
+                            let stale =
+                                used_at.is_none_or(|used| now.duration_since(used) >= STALE_AFTER);
                             if index != followed && stale {
                                 followed = index;
                                 used_at = Some(now);
@@ -494,7 +514,7 @@ mod mod_reader {
     use egui::Context;
     use hidapi::HidApi;
 
-    use super::{Reading, device_reader};
+    use super::{device_reader, Reading};
 
     /// Hat der 3Dconnexion-Driver das Gerät, meldet er den Deckel selbst —
     /// direkte HID-Reports würden doppelt zählen (und scheitern).
@@ -555,7 +575,10 @@ mod mod_reader {
                     }
                     ctx.request_repaint();
                 }
-                Event::Axes { translation, rotation } => {
+                Event::Axes {
+                    translation,
+                    rotation,
+                } => {
                     if let Ok(mut reading) = shared.lock() {
                         reading.axes = [
                             translation[0],
@@ -599,7 +622,7 @@ mod windows_reader {
     use egui::Context;
     use hidapi::HidApi;
 
-    use super::{Reading, device_reader};
+    use super::{device_reader, Reading};
 
     /// HID-Kontext auf Windows: hidapis eigene Gerätesuche ist aus (SolidCraft
     /// #2614), so dass `HidApi::new` kein einziges anderes Gerät anspricht —

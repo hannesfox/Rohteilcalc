@@ -31,6 +31,39 @@ jobs:
           RUSTFLAGS: "-C target-feature=+crt-static"
         run: cargo build --release --locked
 
+      - name: DXC v1.9.2609 herunterladen und SHA256 prüfen
+        shell: pwsh
+        run: |
+          # Pin: neueste stabile DXC-Veröffentlichung (microsoft/DirectXShaderCompiler).
+          # Der SHA256 des ZIPs wird mit Get-FileHash geprüft (Job schlägt
+          # fehl, wenn es nicht übereinstimmt).
+          $url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip"
+          $zip = "$env:TEMP/dxc_2026_09_29.zip"
+          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+          $expected = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
+          $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
+          Write-Output "DXC-Zip-SHA256: $actual (erwartet: $expected)"
+          if ($actual -ine $expected) { Write-Error "SHA256-Mismatch bei $url"; exit 1 }
+
+      - name: DXC-DLLs und Lizenz in dist/ kopieren
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $x64 = "$env:TEMP/dxc_x64"
+          Expand-Archive -Path "$env:TEMP/dxc_2026_09_29.zip" -DestinationPath $x64 -Force
+          # x64-Varianten nach dist/ neben dem .exe (arm64/x86 bleiben unberührt).
+          $dlls = Get-ChildItem -Recurse -LiteralPath $x64 -Include @("dxcompiler.dll", "dxil.dll") |
+            Where-Object { $_.DirectoryName -like "*x64" }
+          foreach ($dll in $dlls) {
+            Copy-Item -Force -LiteralPath $dll.FullName -Destination (Join-Path dist $dll.Name)
+          }
+          # Redistributions-Lizenz (LICENSE-LLVM / MIT / MS) als DXC-LICENSE.txt.
+          $licDest = "dist/DXC-LICENSE.txt"
+          Remove-Item -Force $licDest -ErrorAction SilentlyContinue
+          foreach ($lic in Get-ChildItem -Recurse -LiteralPath $x64 -Include @("LICENSE-LLVM.txt", "LICENCE-MIT.txt", "LICENSE-MS.txt")) {
+            Add-Content -Path $licDest -Value ("=== $($lic.Name) ===`n" + (Get-Content -Raw -LiteralPath $lic.FullName))
+          }
+
       - name: Paket schnüren
         shell: pwsh
         run: |
@@ -38,14 +71,56 @@ jobs:
           Copy-Item target/release/rohteil_calc.exe dist/Rohteilcalc.exe
           Copy-Item assets/logo.png dist/logo.png
           Copy-Item README.md dist/README.md
-          Compress-Archive -Path dist/* -DestinationPath Rohteilcalc-windows-x64.zip -Force
+          # DXC v1.9.2609: dxcompiler.dll + dxil.dll + DXC-LICENSE.txt kommen
+          # (aus den DXC-Schritten darüber) mit ins Zip – und dann auf den
+          # Zielrechner.
+          Compress-Archive -Path dist/* -DestinationPath RohteilCalc-windows-x64.zip -Force
+
+      - name: DXC-DLLs prüfen
+        shell: pwsh
+        run: |
+          $fehler = $false
+          foreach ($dll in @("dist/dxcompiler.dll", "dist/dxil.dll")) {
+            if (Test-Path $dll) {
+              Write-Output "OK: $dll  SHA256: $(Get-FileHash -Path $dll -Algorithm SHA256).Hash"
+            } else {
+              Write-Output "FEHLER: $dll fehlt"; $fehler = $true
+            }
+          }
+          if ($fehler) { exit 1 }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Rohteilcalc-windows-x64
+          name: RohteilCalc-windows-x64
           path: Rohteilcalc-windows-x64.zip
           if-no-files-found: error
+
+      - name: "Smoke-Test: Rohteilcalc.exe --diag"
+        shell: pwsh
+        run: |
+          $report = dist\Rohteilcalc.exe --diag 2>&1
+          Write-Output $report
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Smoke-Test: --diag beendete mit Exit-Code $LASTEXITCODE"
+            exit 1
+          }
+          # Log für den Artifact einsammeln (%TEMP% bzw. %RUNNER_TEMP%).
+          $log = "$env:TEMP/Rohteilcalc.log"
+          if (-not (Test-Path $log)) { $log = "$env:RUNNER_TEMP/Rohteilcalc.log" }
+          if (Test-Path $log) {
+            Copy-Item -Force $log "$env:GITHUB_WORKSPACE/rohteilcalc-startup-diagnose.log"
+          } else {
+            Write-Output "Warnung: Rohteilcalc.log nicht gefunden (Temp: '$env:TEMP', RunnerTemp: '$env:RUNNER_TEMP')"
+          }
+
+      - name: Startup-Diagnose hochladen
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Rohteilcalc-startup-diagnose
+          path: rohteilcalc-startup-diagnose.log
+          if-no-files-found: warn
 
   macos:
     name: macOS (.app)

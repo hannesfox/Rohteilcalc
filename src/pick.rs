@@ -11,7 +11,12 @@ use std::sync::Arc;
 
 /// Mögliche Flächennormale (Anzeige-Koordinaten) unter dem Mauszeiger:
 /// `None`, wenn kein Bauteil-Dreieck getroffen wird.
-pub fn face_normal(model: &ScModel, camera: &OrbitCamera, rect: Rect, pos: [f32; 2]) -> Option<Vec3> {
+pub fn face_normal(
+    model: &ScModel,
+    camera: &OrbitCamera,
+    rect: Rect,
+    pos: [f32; 2],
+) -> Option<Vec3> {
     let (origin, dir) = pick_ray(camera, rect, pos);
     let hit = nearest_hit(model, origin, dir)?;
     // Normale der zusammenhängenden, ebenen Fläche (Flut-Füllung über
@@ -93,7 +98,11 @@ fn pick_ray(camera: &OrbitCamera, rect: Rect, pos: [f32; 2]) -> (Vec3, Vec3) {
 /// Nächstes getroffenes Dreieck (Möller–Trumbore in f64, beidseitig).
 fn nearest_hit(model: &ScModel, origin: Vec3, dir: Vec3) -> Option<usize> {
     let positions = &model.part_positions;
-    let o = [f64::from(origin.x), f64::from(origin.y), f64::from(origin.z)];
+    let o = [
+        f64::from(origin.x),
+        f64::from(origin.y),
+        f64::from(origin.z),
+    ];
     let d = [f64::from(dir.x), f64::from(dir.y), f64::from(dir.z)];
     let mut best: Option<(f64, usize)> = None;
     for (i, t) in model.part_triangles.iter().enumerate() {
@@ -136,11 +145,15 @@ fn coplanar_normal(model: &ScModel, seed: usize) -> Option<Vec3> {
     let positions = &model.part_positions;
     let tris = &model.part_triangles;
     // Kanten-Nachbarschaft nur einmal je Klick aufbauen.
-    let mut edges: std::collections::HashMap<(u32, u32), Vec<u32>> = std::collections::HashMap::new();
+    let mut edges: std::collections::HashMap<(u32, u32), Vec<u32>> =
+        std::collections::HashMap::new();
     for (i, t) in tris.iter().enumerate() {
         let (a, b, c) = (t[0], t[1], t[2]);
         for (p, q) in [(a, b), (b, c), (c, a)] {
-            edges.entry((p.min(q), p.max(q))).or_default().push(i as u32);
+            edges
+                .entry((p.min(q), p.max(q)))
+                .or_default()
+                .push(i as u32);
         }
     }
     let unit_normal = |i: usize| -> Vec3 {
@@ -214,7 +227,7 @@ mod tests {
     use super::face_normal;
     use crate::camera::OrbitCamera;
     use crate::renderer::ScModel;
-    use eframe::egui::{Rect, pos2, vec2};
+    use eframe::egui::{pos2, vec2, Rect};
     use glam::{Mat3, Vec3};
     use std::sync::Arc;
 

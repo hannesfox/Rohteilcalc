@@ -3,8 +3,8 @@
 
 use crate::app::AppState;
 use crate::camera::StandardView;
-use solidcraft_render::Camera as RenderCamera;
 use solidcore_record::Vec3 as RcVec3;
+use solidcraft_render::Camera as RenderCamera;
 
 use eframe::egui::{self, Align2, FontId, Frame, Margin, Pos2, RichText, Ui, Vec2};
 
@@ -40,8 +40,11 @@ pub(crate) fn toolbar(app: &mut AppState, ui: &mut Ui) {
                         tooltip.push_str(&format!("  (Umschalt+{digit})"));
                     }
                     let selected = app.active_view == Some(view);
-                    let text =
-                        RichText::new(label).color(if selected { colors.accent_text } else { colors.text });
+                    let text = RichText::new(label).color(if selected {
+                        colors.accent_text
+                    } else {
+                        colors.text
+                    });
                     let button = egui::Button::new(text)
                         .fill(if selected {
                             colors.accent
@@ -64,7 +67,11 @@ pub(crate) fn toolbar(app: &mut AppState, ui: &mut Ui) {
                     app.camera.fit_view();
                     app.active_view = None;
                 }
-                if ui.button("⟲").on_hover_text("Kamera zurücksetzen (Iso)").clicked() {
+                if ui
+                    .button("⟲")
+                    .on_hover_text("Kamera zurücksetzen (Iso)")
+                    .clicked()
+                {
                     app.camera_reset();
                 }
                 ui.separator();
@@ -144,8 +151,7 @@ pub(crate) fn axes_gizmo(ui: &mut Ui, rect: egui::Rect, cam: &RenderCamera) {
             color,
         );
     }
-    ui.painter()
-        .circle_filled(anchor, 2.5, colors.axis_origin);
+    ui.painter().circle_filled(anchor, 2.5, colors.axis_origin);
 }
 
 /// Fügt alle Viewport-Overlays in das 3D-Fenster ein (Kompass unten links,

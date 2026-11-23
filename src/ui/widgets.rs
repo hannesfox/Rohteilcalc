@@ -48,13 +48,9 @@ pub(crate) fn mono_right(ui: &mut Ui, text: &str) {
 /// Primärer, gefüllter Button (Akzent-Orange) — für die Fußleiste.
 pub(crate) fn button_primary(ui: &mut Ui, text: &str) -> egui::Button<'static> {
     let colors = theme::colors(ui.ctx());
-    egui::Button::new(
-        RichText::new(text)
-            .color(colors.accent_text)
-            .strong(),
-    )
-    .fill(colors.accent)
-    .corner_radius(theme::CARD_ROUNDING as u8)
+    egui::Button::new(RichText::new(text).color(colors.accent_text).strong())
+        .fill(colors.accent)
+        .corner_radius(theme::CARD_ROUNDING as u8)
 }
 
 /// Toggle-Schalter ( McGregor ohne egui-Basis-Widget).
@@ -68,7 +64,11 @@ pub(crate) fn toggle_switch(ui: &mut Ui, checked: &mut bool) -> Response {
     }
     let painter = ui.painter();
     let fill = if *checked { colors.ok } else { colors.stroke };
-    painter.rect_filled(rect.shrink2(Vec2::new(1.0, 1.0)), (rect.height() * 0.5) as u8, fill);
+    painter.rect_filled(
+        rect.shrink2(Vec2::new(1.0, 1.0)),
+        (rect.height() * 0.5) as u8,
+        fill,
+    );
     let r = rect.height() * 0.5 - 2.0;
     let knob_x = if *checked {
         rect.right() - r - 3.0

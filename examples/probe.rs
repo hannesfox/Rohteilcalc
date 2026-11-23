@@ -7,7 +7,10 @@ fn main() {
         Err(e) => {
             // Latin-1-Fallback: STEP-Text ist ausserhalb von String-Literalen ASCII
             eprintln!("Warnung: kein UTF-8, nutze Latin-1-Fallback");
-            e.into_bytes().iter().map(|&b| b as char).collect::<String>()
+            e.into_bytes()
+                .iter()
+                .map(|&b| b as char)
+                .collect::<String>()
         }
     };
     let t0 = std::time::Instant::now();
@@ -17,7 +20,11 @@ fn main() {
                 "parse OK in {:?}, data sections = {}, entities = {}",
                 t0.elapsed(),
                 exchange.data.len(),
-                exchange.data.iter().map(|d| d.entities.len()).sum::<usize>()
+                exchange
+                    .data
+                    .iter()
+                    .map(|d| d.entities.len())
+                    .sum::<usize>()
             );
         }
         Err(e) => println!("parse ERROR: {e:?}"),

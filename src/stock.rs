@@ -196,7 +196,11 @@ pub fn detect_round_axis(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Opti
     (0..3).find_map(|axis| cross_section_round(positions, triangles, axis))
 }
 
-fn cross_section_round(positions: &[[f32; 3]], triangles: &[[u32; 3]], axis: usize) -> Option<usize> {
+fn cross_section_round(
+    positions: &[[f32; 3]],
+    triangles: &[[u32; 3]],
+    axis: usize,
+) -> Option<usize> {
     // Achsen-Wahl: (a, b) = die beiden übrigen Koordinaten.
     let others = match axis {
         0 => (1usize, 2usize),
@@ -226,11 +230,23 @@ fn cross_section_round(positions: &[[f32; 3]], triangles: &[[u32; 3]], axis: usi
     // der projizierten Dreiecksflächen ist die Konturfläche.
     let mut area = 0.0_f64;
     for t in triangles {
-        let Some(a) = positions.get(t[0] as usize) else { continue };
-        let Some(b) = positions.get(t[1] as usize) else { continue };
-        let Some(c) = positions.get(t[2] as usize) else { continue };
-        let u = [f64::from(b[others.0] - a[others.0]), f64::from(b[others.1] - a[others.1])];
-        let v = [f64::from(c[others.0] - a[others.0]), f64::from(c[others.1] - a[others.1])];
+        let Some(a) = positions.get(t[0] as usize) else {
+            continue;
+        };
+        let Some(b) = positions.get(t[1] as usize) else {
+            continue;
+        };
+        let Some(c) = positions.get(t[2] as usize) else {
+            continue;
+        };
+        let u = [
+            f64::from(b[others.0] - a[others.0]),
+            f64::from(b[others.1] - a[others.1]),
+        ];
+        let v = [
+            f64::from(c[others.0] - a[others.0]),
+            f64::from(c[others.1] - a[others.1]),
+        ];
         area += (u[0] * v[1] - u[1] * v[0]).abs() * 0.5;
     }
     let silhouette = area * 0.5;
@@ -242,7 +258,6 @@ fn cross_section_round(positions: &[[f32; 3]], triangles: &[[u32; 3]], axis: usi
         None
     }
 }
-
 
 /// Ermittelt die Hauptachsen (Trägheitsachsen/Kovarianz) und die
 /// Ausrichtungsmatrix: Längste Seite -> X, mittlere -> Y, kleinste -> Z.
@@ -659,7 +674,11 @@ fn alignment_from_candidates(
     // Legacy-Pfad: Ecke (0,0) unten; verfeinerter Pfad (Anzeige/Rohteil):
     // X/Y um die Bauteilmitte ausgemittelt — Z bleibt unten auf 0.
     let offset = if center_xy {
-        Vec3::new(min_bound.x + ext.x * 0.5, min_bound.y + ext.y * 0.5, min_bound.z)
+        Vec3::new(
+            min_bound.x + ext.x * 0.5,
+            min_bound.y + ext.y * 0.5,
+            min_bound.z,
+        )
     } else {
         min_bound
     };
@@ -849,10 +868,7 @@ pub(crate) fn eigen_symmetric(cov: Mat3) -> [Vec3; 3] {
                     m[q][k] = c * rq[k] - s * rp[k];
                 }
                 // Spalten p und q drehen (A·Mᵀ).
-                let (cp, cq) = (
-                    [m[0][p], m[1][p], m[2][p]],
-                    [m[0][q], m[1][q], m[2][q]],
-                );
+                let (cp, cq) = ([m[0][p], m[1][p], m[2][p]], [m[0][q], m[1][q], m[2][q]]);
                 m[0][p] = c * cp[0] + s * cq[0];
                 m[1][p] = c * cp[1] + s * cq[1];
                 m[2][p] = c * cp[2] + s * cq[2];
@@ -860,10 +876,7 @@ pub(crate) fn eigen_symmetric(cov: Mat3) -> [Vec3; 3] {
                 m[1][q] = c * cq[1] - s * cp[1];
                 m[2][q] = c * cq[2] - s * cp[2];
                 // Eigenvektor-Basis mitführen (gleiche Spaltendrehung).
-                let (vp, vq) = (
-                    [v[0][p], v[1][p], v[2][p]],
-                    [v[0][q], v[1][q], v[2][q]],
-                );
+                let (vp, vq) = ([v[0][p], v[1][p], v[2][p]], [v[0][q], v[1][q], v[2][q]]);
                 v[0][p] = c * vp[0] + s * vq[0];
                 v[1][p] = c * vp[1] + s * vq[1];
                 v[2][p] = c * vp[2] + s * vq[2];
@@ -989,7 +1002,13 @@ mod alignment_tests {
         let raw = box_vertices(100.0, 40.0, 20.0);
         let rotated: Vec<Vec3> = raw
             .iter()
-            .map(|v| rotate(rotate(*v, Vec3::Z, 30_f32.to_radians()), Vec3::X, 20_f32.to_radians()))
+            .map(|v| {
+                rotate(
+                    rotate(*v, Vec3::Z, 30_f32.to_radians()),
+                    Vec3::X,
+                    20_f32.to_radians(),
+                )
+            })
             .collect();
 
         let (_, size) = alignment_for_vertices_refined(&rotated).expect("ausrichtbar");
@@ -1051,8 +1070,9 @@ mod alignment_tests {
         let rotated = |v: Vec3| rotate(v, Vec3::Z, 35_f32.to_radians());
         let cloud: Vec<Vec3> = (-20..=20)
             .flat_map(|i| {
-                (-5..=5)
-                    .flat_map(move |j| (-2..=2).map(move |k| Vec3::new(i as f32, j as f32, k as f32)))
+                (-5..=5).flat_map(move |j| {
+                    (-2..=2).map(move |k| Vec3::new(i as f32, j as f32, k as f32))
+                })
             })
             .map(rotated)
             .collect();
@@ -1079,8 +1099,7 @@ mod alignment_tests {
             .iter()
             .map(|v| rotate(*v, Vec3::X, 25_f32.to_radians()))
             .collect();
-        let (align, size) =
-            super::alignment_with_down(&rotated, top_normal).expect("ausrichtbar");
+        let (align, size) = super::alignment_with_down(&rotated, top_normal).expect("ausrichtbar");
 
         // Bauteilmaße: 40 (Y) × 100 (Z-Fläche quer) … die Grundfläche ist
         // 100×40, Höhe 20 — Z muss 20 sein.
@@ -1093,11 +1112,20 @@ mod alignment_tests {
         // top_normal fällt nach der Rotation auf −Z (Fläche unten).
         let mapped = align.rot * top_normal;
         assert!(mapped.z < -0.98, "Flächennormale zeigt unten: {mapped:?}");
-        assert!(mapped.x.abs() < 0.05 && mapped.y.abs() < 0.05, "sauber: {mapped:?}");
+        assert!(
+            mapped.x.abs() < 0.05 && mapped.y.abs() < 0.05,
+            "sauber: {mapped:?}"
+        );
 
         // Unten liegt die angeklickte Fläche exakt auf Z = 0; Höhe 20.
-        let zmin = rotated.iter().map(|&v| align.apply(v).z).fold(f32::MAX, f32::min);
-        let zmax = rotated.iter().map(|&v| align.apply(v).z).fold(f32::MIN, f32::max);
+        let zmin = rotated
+            .iter()
+            .map(|&v| align.apply(v).z)
+            .fold(f32::MAX, f32::min);
+        let zmax = rotated
+            .iter()
+            .map(|&v| align.apply(v).z)
+            .fold(f32::MIN, f32::max);
         assert!(zmin.abs() < 0.02, "Unterkante: {zmin}");
         assert!((zmax - zmin - 20.0).abs() < 0.05, "Höhe: {zmax}");
     }
@@ -1172,7 +1200,12 @@ mod alignment_tests {
 
     /// Zylinder (Achse entlang `axis`) als Dreiecksnetz, geschlossen mit
     /// Deckelflächen — Datengrundlage für die Rundmaterial-Erkennung.
-    fn cylinder_mesh(r: f32, length: f32, axis: usize, segments: u32) -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
+    fn cylinder_mesh(
+        r: f32,
+        length: f32,
+        axis: usize,
+        segments: u32,
+    ) -> (Vec<[f32; 3]>, Vec<[u32; 3]>) {
         let mut positions = Vec::new();
         for xi in [0.0_f32, length] {
             for s in 0..segments {
@@ -1226,7 +1259,11 @@ mod alignment_tests {
         use super::{round_stock_from_part, StockParams};
         let result = round_stock_from_part(
             Vec3::new(120.0, 50.0, 50.0),
-            StockParams { saw_x_mm: 5.0, round_add_mm: 2.0, ..StockParams::default() },
+            StockParams {
+                saw_x_mm: 5.0,
+                round_add_mm: 2.0,
+                ..StockParams::default()
+            },
         );
         assert!(result.round);
         assert_eq!(result.stock_size.x, 125.0);

@@ -60,6 +60,15 @@ cargo run -- --inspect bauteil.step
 cargo run -- --render bauteil.step ansicht.bmp -0.72 0.42 1.0 edges
 ```
 
+**Startup-Diagnose (`--diag`, Windows/macOS):** ohne Fenster prüft das
+Programm Version, Adapter und einen echten Geräteprobe-Versuch – Bericht auf
+stdout und in `%TEMP%\Rohteilcalc.log`. Exit-Code 0 (auch bei 0 Adaptern).
+Vom entpackten Ordner in PowerShell:
+
+```powershell
+.\Rohteilcalc.exe --diag
+```
+
 ## Rohteilregeln
 
 | Achse | Regel |
@@ -81,11 +90,43 @@ Die aktuellen Builds liegen unter
 [**Actions → Build**](https://github.com/hannesfox/Rohteilcalc/actions/workflows/main.yml)
 als Artefakt:
 
-- `Rohteilcalc-windows-x64.zip` → enthält `Rohteilcalc.exe`
+- `Rohteilcalc-windows-x64.zip` → enthält `Rohteilcalc.exe`,
+  `dxcompiler.dll`, `dxil.dll` (Microsoft DirectXShaderCompiler v1.9.2609)
+  und `DXC-LICENSE.txt` – die beiden DLLs müssen **direkt neben dem
+  `.exe`** liegen, so dass DX12 deterministisch über DXC (`DynamicDxc`)
+  läuft.
 - `Rohteilcalc-macos-universal.zip` → enthält `Rohteilcalc.app`
 
 Bei einem Tag (`v*`) werden die Pakete zusätzlich als
 [Release](https://github.com/hannesfox/Rohteilcalc/releases) veröffentlicht.
+
+### Troubleshooting: Starts mit Problemen
+
+Ein stiller Start auf Windows ist jetzt diagnosierbar:
+
+1. **Log ansehen:** Das Programm schreibt ein Crash-Log nach
+   `%TEMP%\Rohteilcalc.log`; am Start des Vorläufers steht das vorherige
+   Log in `Rohteilcalc.prev.log`. Falls das Log fehlt, ging es nach dem
+   Neustart noch gar nicht so weit.
+2. **Diagnose laufen lassen:** In einer PowerShell im entpackten Ordner:
+   ```powershell
+   .\Rohteilcalc.exe --diag
+   ```
+   Der Bericht (Version, Adapter, Limits, echte Geräteprobe) kommt auf
+   stdout und ins Log.
+3. **Vom Terminal starten:** Mit Doppelklick ist stdout ohne Konsole
+   unsichtbar; ein Start aus einer PowerShell/cmd zeigt dann die
+   Meldungen (`RohteilCalc konnte nicht starten: …`) – der Dialog nennt
+   das Log.
+4. **Alternativen (weiterführend):** Falls DX12 (oder der mitgelieferte
+   DXC) problematisch ist, Backend umstellen:
+   ```powershell
+   $env:WGPU_BACKEND = "gl"        # oder "vulkan"
+   $env:WGPU_DX12_COMPILER = "fxc"
+   .\Rohteilcalc.exe
+   ```
+5. **Beim Melden eines Problems:** Nimm den `--diag`-Bericht und den Inhalt
+   von `%TEMP%\Rohteilcalc.log` als Text mit (keine STEP-Datei-Inhalte).
 
 ### Hinweise zu den Downloads
 
@@ -128,6 +169,7 @@ cargo build --release
 ├── build.rs                     # bettet das Icon unter Windows ein
 ├── src/
 │   ├── main.rs                  # Einstieg: GUI, CLI, BMP-Export
+│   ├── diag.rs                  # Start-Log, --diag-Berichte, Adapter-Proben, GPU-Fehler-Log
 │   ├── step.rs                  # STEP-Import (B-Rep bleibt erhalten) + Tessellierung
 │   ├── mesh.rs                  # Anzeigenetz, Normalen, Feature-Kanten
 │   ├── stock.rs                 # Ausrichtung und Rohteilregeln

@@ -85,7 +85,11 @@ fn status_chip(app: &mut AppState, ui: &mut Ui) {
         .unwrap_or_else(|| "🧱 Demo".to_string());
     let text = RichText::new(label)
         .size(theme::SIZE_HINT)
-        .color(if app.status_is_error { colors.error } else { colors.text });
+        .color(if app.status_is_error {
+            colors.error
+        } else {
+            colors.text
+        });
     let chip = egui::Button::new(text)
         .fill(if app.status_is_error {
             colors.error.gamma_multiply(0.25)
@@ -155,13 +159,11 @@ fn result_card(app: &mut AppState, ui: &mut Ui) {
     };
     widgets::section_label(ui, "Rohteil");
     ui.label(
-        RichText::new(
-            result_string(app.model.as_deref()).unwrap_or_default(),
-        )
-        .monospace()
-        .strong()
-        .size(theme::SIZE_TITLE)
-        .color(colors.accent),
+        RichText::new(result_string(app.model.as_deref()).unwrap_or_default())
+            .monospace()
+            .strong()
+            .size(theme::SIZE_TITLE)
+            .color(colors.accent),
     );
     // Volumen/Materialverhältnis, falls das Bauteilvolumen berechenbar ist.
     let part_vol = model.volume_mm3;
@@ -197,11 +199,7 @@ fn result_card(app: &mut AppState, ui: &mut Ui) {
             ui.ctx().copy_text(text);
         }
     }
-    copy_card.on_hover_text(if app
-        .model
-        .as_deref()
-        .is_some_and(|m| m.round)
-    {
+    copy_card.on_hover_text(if app.model.as_deref().is_some_and(|m| m.round) {
         "Rohteilmaße als „Ø38*32“ in die Zwischenablage kopieren"
     } else {
         "Rohteilmaße als „40*30*41“ in die Zwischenablage kopieren"
@@ -514,10 +512,7 @@ fn shadow_section(app: &mut AppState, ui: &mut Ui) {
                         .suffix(" mm"),
                 );
                 if ui
-                    .add_enabled(
-                        app.model.is_some(),
-                        egui::Button::new("Kontur erzeugen"),
-                    )
+                    .add_enabled(app.model.is_some(), egui::Button::new("Kontur erzeugen"))
                     .clicked()
                 {
                     app.build_shadow();
@@ -530,7 +525,10 @@ fn shadow_section(app: &mut AppState, ui: &mut Ui) {
                 widgets::segmented(
                     ui,
                     &mut app.dxf_variant,
-                    &DxfVariant::ALL.iter().map(|v| (*v, v.label())).collect::<Vec<_>>(),
+                    &DxfVariant::ALL
+                        .iter()
+                        .map(|v| (*v, v.label()))
+                        .collect::<Vec<_>>(),
                 );
             });
             let stem = app
@@ -627,10 +625,8 @@ fn shadow_section(app: &mut AppState, ui: &mut Ui) {
                         app.toggle_inner_pick();
                     }
                     let n = s.inner_polygons.len();
-                    if n > 0 {
-                        if ui.button("Löschen").clicked() {
-                            app.clear_inner_contours();
-                        }
+                    if n > 0 && ui.button("Löschen").clicked() {
+                        app.clear_inner_contours();
                     }
                 });
                 {
@@ -676,10 +672,8 @@ fn display_section(app: &mut AppState, ui: &mut Ui) {
         .default_open(false)
         .show(ui, |ui| {
             ui.add_space(2.0);
-            let modes: Vec<(ViewMode, &'static str)> = ViewMode::ALL
-                .iter()
-                .map(|m| (*m, m.label()))
-                .collect();
+            let modes: Vec<(ViewMode, &'static str)> =
+                ViewMode::ALL.iter().map(|m| (*m, m.label())).collect();
             if widgets::segmented(ui, &mut app.mode, &modes) {
                 app.rebuild();
             }
@@ -760,7 +754,10 @@ fn help_section(app: &mut AppState, ui: &mut Ui) {
                 ui.add_space(2.0);
                 widgets::hint(
                     ui,
-                    &format!("Kanten {} · Dreiecke {}", model.edge_count, model.triangle_count),
+                    &format!(
+                        "Kanten {} · Dreiecke {}",
+                        model.edge_count, model.triangle_count
+                    ),
                 );
             }
         });

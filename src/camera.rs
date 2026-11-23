@@ -162,11 +162,7 @@ impl OrbitCamera {
 
     pub fn eye(&self) -> Vec3 {
         let cp = self.pitch.cos();
-        let dir = Vec3::new(
-            cp * self.yaw.sin(),
-            -cp * self.yaw.cos(),
-            self.pitch.sin(),
-        );
+        let dir = Vec3::new(cp * self.yaw.sin(), -cp * self.yaw.cos(), self.pitch.sin());
         self.target + dir * self.distance
     }
 
@@ -241,8 +237,8 @@ impl OrbitCamera {
     /// Zoom um einen Faktor (kleiner als 1 = heran), begrenzt auf den
     /// Modellkranz — die 3D-Maus kommt mit `exp(-1.5·t·Bewegung)` daher.
     pub fn zoom_factor(&mut self, factor: f32) {
-        self.distance = (self.distance * factor)
-            .clamp(self.model_radius * 0.15, self.model_radius * 25.0);
+        self.distance =
+            (self.distance * factor).clamp(self.model_radius * 0.15, self.model_radius * 25.0);
     }
 
     pub fn zoom(&mut self, scroll: f32) {

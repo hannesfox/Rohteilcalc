@@ -12,10 +12,14 @@
 // Ohne eingebautes Konsolen-Subsystem (erst ab Windows-Release, d. h. der
 // CI-Build): Doppelklick startet dann wirklich still. Der Testrunner und
 // Debug-Builds behalten das Konsolen-Fenster.
-#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 mod app;
 mod camera;
+mod diag;
 mod mesh;
 #[allow(dead_code)]
 mod mesher;
@@ -36,10 +40,15 @@ use renderer::{ScSession, ViewMode};
 use std::path::{Path, PathBuf};
 
 fn main() -> eframe::Result<()> {
+    // Crash-sicherer Start: Start-Log beginnt (Rotation + Version, Exe,
+    // Args, OS/Arch, relevante Env, DXC-DLLs, DX12-Compiler-Wahl) —
+    // Best-Effort, stürzt den Start nie ab (Fix 2).
+    diag::log_startup();
+
     // Mit dem Eltern-Terminal verbinden (nur Windows-Release, also ohne
     // eingebautes Konsolen-Subsystem): Der Aufrufer sieht dann die Ausgaben
-    // der CLI-Modi (`--inspect`, `--render`, `--space-probe`) wieder, z. B.
-    // `Rohteilcalc.exe --inspect datei.step` aus PowerShell.
+    // der CLI-Modi (`--inspect`, `--render`, `--space-probe`, `--diag`)
+    // wieder, z. B. `RohteilCalc.exe --inspect datei.step` aus PowerShell.
     #[cfg(all(target_os = "windows", not(debug_assertions)))]
     unsafe {
         windows_sys::Win32::System::Console::AttachConsole(
@@ -49,6 +58,17 @@ fn main() -> eframe::Result<()> {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     install_startup_panic_hook(is_cli_mode(&args));
+
+    // Headless Startup-Diagnose, ohne Fenster (Fix 4): Version, Exe, OS/
+    // Arch, DXC-DLLs, Adapter + Geräteprobe — auf stdout UND ins Start-Log.
+    // Exit-Code 0 (auch bei 0 Adaptern — Warnung drucken); 1 nur bei
+    // internem Fehler.
+    if args.first().map(String::as_str) == Some("--diag") {
+        if !diag::run_diag() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
 
     // Achsen-Sonde der 3D-Maus: `--space-probe` (20 s) zeigt die sechs
     // Rohachsen live, so dass man sieht, welcher Kanal auf welche Richtung
@@ -111,14 +131,7 @@ fn main() -> eframe::Result<()> {
             Some("wire") | Some("wireframe") => ViewMode::Wire,
             _ => ViewMode::ShadedEdges,
         };
-        if let Err(err) = render_cli(
-            Path::new(path),
-            Path::new(out),
-            yaw,
-            pitch,
-            zoom,
-            mode,
-        ) {
+        if let Err(err) = render_cli(Path::new(path), Path::new(out), yaw, pitch, zoom, mode) {
             eprintln!("Fehler: {err}");
             std::process::exit(1);
         }
@@ -135,10 +148,14 @@ fn main() -> eframe::Result<()> {
         wgpu_options: wgpu_options(),
         ..Default::default()
     };
+    diag::log_line("Phase: creating eframe window");
     let result = eframe::run_native(
         "RohteilCalc",
         options,
         Box::new(move |cc| {
+            // Adapter-Info (cc.wgpu_render_state → adapter.get_info()) und
+            // Target-Format ins Start-Log (Fix 2).
+            diag::log_creation_callback(cc);
             if let Err(e) = renderer::install(cc) {
                 eprintln!("Warnung: GPU-Pipelines nicht installiert: {e}");
                 show_startup_error(&e.to_string());
@@ -160,8 +177,11 @@ fn main() -> eframe::Result<()> {
 fn wgpu_options() -> egui_wgpu::WgpuConfiguration {
     let mut options = egui_wgpu::WgpuConfiguration::default();
     if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup {
-        setup.instance_descriptor.backend_options.dx12.shader_compiler =
-            solidcraft_gpu::dx12_compiler();
+        setup
+            .instance_descriptor
+            .backend_options
+            .dx12
+            .shader_compiler = solidcraft_gpu::dx12_compiler();
     }
     options
 }
@@ -169,47 +189,50 @@ fn wgpu_options() -> egui_wgpu::WgpuConfiguration {
 /// Kleiner Start-Fehler-Dialog für den Fall, dass eframe nichts mehr melden
 /// kann, da Windows ohne Konsolen-Subsystem nichts einrichtet. Kurz halten.
 fn show_startup_error(message: &str) {
+    // Fehler in das Start-Log schreiben (Fix 2) — auch wenn die rfd-Dialoge
+    // keine Konsole sehen.
+    diag::log_line(&format!("Startfehler: {message}"));
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
         .set_title("RohteilCalc konnte nicht starten")
         .set_description(format!(
             "{message}\n\nTipp: Mit der Umgebungsvariable WGPU_BACKEND=vulkan \
              (oder gl) bzw. WGPU_DX12_COMPILER=fxc lässt sich die \
-             Grafikanbindung wechseln."
+             Grafikanbindung wechseln.\nStart-Protokoll: {}",
+            diag::log_path().display()
         ))
         .show();
 }
 
 /// True, wenn ein Headless-CLI-Modus läuft (`--inspect`, `--render`,
-/// `--space-probe`). Diese melden sich bei Fehlern im Terminal, nicht per
-/// Dialog — und nutzen ihn auch bei Panics.
+/// `--space-probe`, `--diag`). Diese melden sich bei Fehlern im Terminal,
+/// nicht per Dialog — und nutzen ihn auch bei Panics.
 fn is_cli_mode(args: &[String]) -> bool {
     matches!(
         args.first().map(String::as_str),
-        Some("--inspect") | Some("--render") | Some("--space-probe")
+        Some("--inspect") | Some("--render") | Some("--space-probe") | Some("--diag")
     )
 }
 
-/// Panics auf dem Haupt-Thread in Windows-Release als Dialog anzeigen
-/// (ohne Konsolen-Subsystem sind `eprintln!`-Meldungen nichts mehr). Der
-/// Hook überprüft ausdrücklich den thread-name `main`: Panics in
-/// Worker-Threads (z. B. dem STEP-Loader in `app.rs`, der sie per
-/// `catch_unwind` abfängt) melden sich im Terminal. Im Anschluss der
-/// Standard-Hook aufgerufen.
-#[cfg(all(target_os = "windows", not(debug_assertions)))]
+/// Jeden Panic — auf jedem Thread, GUI- oder CLI-Modus — ins Start-Log
+/// schreiben (Fix 2). Danach der vorherige Standard-Hook weiter. Der
+/// Dialog-Semantik bleiben bei Windows-Release + Haupt-Thread +
+/// nicht-CLI-Modus geblieben: Er darf nur entstehen, wenn der Panic
+/// sichtbar ist, und niemals Störung verursachen.
 fn install_startup_panic_hook(cli_mode: bool) {
+    let _ = cli_mode; // beim Windows-Release-Dialog-Zweig gelesen
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
+        // Jeder Panic (jeder Thread) ins Log — sonst wäre ein "silent
+        // Start-Crash" immer noch kaum diagnosierbar.
+        diag::log_line(&format!("Panic: {info}"));
+        #[cfg(all(target_os = "windows", not(debug_assertions)))]
         if !cli_mode && std::thread::current().name() == Some("main") {
             show_startup_error(&info.to_string());
         }
         default_hook(info);
     }));
 }
-
-/// Panik-Dialog nur unter Windows-Release; sonst kein-Op.
-#[cfg(not(all(target_os = "windows", not(debug_assertions))))]
-fn install_startup_panic_hook(_cli_mode: bool) {}
 
 // ---------------------------------------------------------
 // Headless-Befehle (--inspect, --render) über die SolidCraft-Pipelines.
@@ -241,9 +264,15 @@ impl Probe {
     fn print_status(&mut self) {
         let elapsed = self.start.elapsed().as_secs_f64();
         let (registered, device) = space_mouse::driver_status();
-        let status = format!("registriert={registered} gerät={device} empfang={}", self.got_signal);
+        let status = format!(
+            "registriert={registered} gerät={device} empfang={}",
+            self.got_signal
+        );
         if status != self.last_status || elapsed - self.last_print >= 5.0 {
-            println!( "[{:5.1}s] Driver {status}   Spitze Ty: {:+}", elapsed, self.peak[1]);
+            println!(
+                "[{:5.1}s] Driver {status}   Spitze Ty: {:+}",
+                elapsed, self.peak[1]
+            );
             self.last_status = status;
             self.last_print = elapsed;
         }
@@ -329,7 +358,16 @@ fn space_probe() {
         ..Default::default()
     };
     let peaks = std::sync::Arc::new(std::sync::Mutex::new([0_i16; 6]));
-    let app = Probe { mouse, start: Instant::now(), last: [0; 6], peak: [0; 6], got_signal: false, last_print: 0.0, last_status: String::new(), peaks: std::sync::Arc::clone(&peaks) };
+    let app = Probe {
+        mouse,
+        start: Instant::now(),
+        last: [0; 6],
+        peak: [0; 6],
+        got_signal: false,
+        last_print: 0.0,
+        last_status: String::new(),
+        peaks: std::sync::Arc::clone(&peaks),
+    };
     let result = eframe::run_native(
         "3d-maus-sonde",
         options,
@@ -365,8 +403,7 @@ struct InspectOut {
 
 fn inspect_cli(path: &Path) -> Result<InspectOut, String> {
     let session = ScSession::open(path, crate::step::Quality::Medium)?;
-    let model =
-        session.model(ViewMode::ShadedEdges, false, stock::StockParams::default())?;
+    let model = session.model(ViewMode::ShadedEdges, false, stock::StockParams::default())?;
     Ok(InspectOut {
         bodies: model.bodies.len(),
         triangles: model.triangle_count,

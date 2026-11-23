@@ -2,14 +2,14 @@
 //! zählen, welche Flächen scheitern und welche Normals/Winding医生的 konträren
 //! Indizien zeigen.
 
-#[path = "../src/step.rs"]
-mod step;
 #[path = "../src/mesh.rs"]
 mod mesh;
-#[path = "../src/stock.rs"]
-mod stock;
 #[path = "../src/mesher.rs"]
 mod mesher;
+#[path = "../src/step.rs"]
+mod step;
+#[path = "../src/stock.rs"]
+mod stock;
 
 use std::path::Path;
 use truck_stepio::r#in::alias::re_exports::{BoundedCurve, ParameterDivision1D};
@@ -44,7 +44,13 @@ fn analytic_coverage() {
                 Surface::NurbsSurface(_) => "Nurbs",
             };
             let loops: usize = face.boundaries.len();
-            match mesher::tessellate_face(face, &cshell.vertices, &cshell.edges, 0.05, &format!("face{fi} {kind}")) {
+            match mesher::tessellate_face(
+                face,
+                &cshell.vertices,
+                &cshell.edges,
+                0.05,
+                &format!("face{fi} {kind}"),
+            ) {
                 Some(mesh) => {
                     // Boundary-BBOX aus den abgeflachten Randkurven.
                     let mut bmin = [f64::INFINITY; 3];
@@ -67,8 +73,12 @@ fn analytic_coverage() {
                     for v in &mesh.vertices {
                         let arr = [v.x, v.y, v.z];
                         for d in 0..3 {
-                            if arr[d] < bmin[d] { over = over.max(bmin[d] - arr[d]); }
-                            if arr[d] > bmax[d] { over = over.max(arr[d] - bmax[d]); }
+                            if arr[d] < bmin[d] {
+                                over = over.max(bmin[d] - arr[d]);
+                            }
+                            if arr[d] > bmax[d] {
+                                over = over.max(arr[d] - bmax[d]);
+                            }
                         }
                     }
                     if over > 1e-6 {

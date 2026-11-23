@@ -2,14 +2,14 @@
 //! Teile? Lädt die Datei, tesselliert sie und gibt Roh-Ausdehnung, Ergebnis
 //! der verfeinerten Ausrichtung und die Kovarianz-Hauptachsen aus.
 
-#[path = "../src/step.rs"]
-mod step;
-#[path = "../src/stock.rs"]
-mod stock;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/mesher.rs"]
 mod mesher;
+#[path = "../src/step.rs"]
+mod step;
+#[path = "../src/stock.rs"]
+mod stock;
 
 use glam::Vec3;
 use std::path::Path;
@@ -40,7 +40,10 @@ fn probe_test4_alignment() {
     }
     println!("vertices: {} · triangles: {tris}", all.len());
     let raw_ext = raw_max - raw_min;
-    println!("RAW extent: x={:.2} y={:.2} z={:.2}", raw_ext.x, raw_ext.y, raw_ext.z);
+    println!(
+        "RAW extent: x={:.2} y={:.2} z={:.2}",
+        raw_ext.x, raw_ext.y, raw_ext.z
+    );
     println!("RAW min {raw_min:?} max {raw_max:?}");
 
     // Software-Render (Punkt-Plot mit Shading) → PPM → PNG, damit man das
@@ -83,7 +86,10 @@ fn probe_test4_alignment() {
         println!("keine Ausrichtung möglich");
         return;
     };
-    println!("ALIGNED size: x={:.2} y={:.2} z={:.2}", size.x, size.y, size.z);
+    println!(
+        "ALIGNED size: x={:.2} y={:.2} z={:.2}",
+        size.x, size.y, size.z
+    );
 
     // Ausgerichtete Ausdehnung nochmal direkt messen (Vertrauenscheck).
     let mut amin = Vec3::splat(f32::MAX);
@@ -114,7 +120,10 @@ fn probe_test4_alignment() {
     }
     cov /= n;
     let ev = stock::eigen_symmetric(cov);
-    println!("cov diag: {:.2} {:.2} {:.2}", cov.x_axis.x, cov.y_axis.y, cov.z_axis.z);
+    println!(
+        "cov diag: {:.2} {:.2} {:.2}",
+        cov.x_axis.x, cov.y_axis.y, cov.z_axis.z
+    );
     for (i, e) in ev.iter().enumerate() {
         println!("eigenvec {i}: {e:?}");
     }
@@ -216,8 +225,7 @@ fn probe_test4_alignment() {
         })
         .collect();
     projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    let tail: Vec<Vec3> = projected
-        [projected.len() * 3 / 4..]
+    let tail: Vec<Vec3> = projected[projected.len() * 3 / 4..]
         .iter()
         .map(|&(_, p)| p)
         .collect();
@@ -258,7 +266,11 @@ fn probe_test4_alignment() {
         // Welt-Rahmen-Kandidaten: Spalten = Achsen ⇒ p = frameᵀ·v.
         // align.rot mappt Welt→ausgerichtet (Zeilen = Achsen) ⇒ p = frame·v.
         let is_align_rot = name == "aligned";
-        let rt = if is_align_rot { frame } else { frame.transpose() };
+        let rt = if is_align_rot {
+            frame
+        } else {
+            frame.transpose()
+        };
         let (mut mn, mut mx) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
         for v in &all {
             let p = rt * *v;
@@ -268,13 +280,24 @@ fn probe_test4_alignment() {
         let e = mx - mn;
         println!(
             "Frame {name:8}: x={:6.2} y={:6.2} z={:6.2}  Vol {:.0}",
-            e.x, e.y, e.z, (e.x * e.y * e.z) as f64
+            e.x,
+            e.y,
+            e.z,
+            (e.x * e.y * e.z) as f64
         );
-        let vis = if is_align_rot { frame.transpose() } else { frame };
+        let vis = if is_align_rot {
+            frame.transpose()
+        } else {
+            frame
+        };
         render_frame_ppm(&part.bodies, vis, name);
     }
 
-    let helper = if shaft_raw.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let helper = if shaft_raw.x.abs() < 0.9 {
+        Vec3::X
+    } else {
+        Vec3::Y
+    };
     let sy = shaft_raw.cross(helper).normalize();
     let sz = shaft_raw.cross(sy);
     let frame = glam::Mat3::from_cols(shaft_raw, sy, sz);
@@ -300,14 +323,14 @@ fn probe_test4_alignment() {
         if vol < best_plate_vol {
             best_plate_vol = vol;
             best_plate_frame = r;
-            println!("  yaw={yaw:2}° → {}×{}×{} = {:.0}", e.x, e.y, e.z, vol as f64);
+            println!(
+                "  yaw={yaw:2}° → {}×{}×{} = {:.0}",
+                e.x, e.y, e.z, vol as f64
+            );
         }
     }
     render_frame_ppm(&part.bodies, best_plate_frame, "plate");
-    println!(
-        "Grundplatte-unten best: {:.0} mm³",
-        best_plate_vol as f64
-    );
+    println!("Grundplatte-unten best: {:.0} mm³", best_plate_vol as f64);
 
     // Rotationsachse? Für jeden Kandidaten-Achsrichtung prüfen, wie stark
     // die quer dazu gemessenen Boxmaße schwanken, wenn das Teil um die
@@ -363,22 +386,22 @@ fn probe_test4_alignment() {
                 }
                 mx - mn
             },
-            dmin_b, dmax_b, dmin_c, dmax_c, vol_min, vol_max
+            dmin_b,
+            dmax_b,
+            dmin_c,
+            dmax_c,
+            vol_min,
+            vol_max
         );
     }
 }
 
 /// Software-Renderer: Orthoprojektion, Tiefe via Z-Buffer,
 /// Flach-Shading über die Normale. Schreibt 4 PPMs nach target/.
-fn render_ppm(
-    bodies: &[step::Body],
-    all: &[Vec3],
-    _rmin: Vec3,
-    _rmax: Vec3,
-) {
+fn render_ppm(bodies: &[step::Body], all: &[Vec3], _rmin: Vec3, _rmax: Vec3) {
     let views: [(&str, Vec3, Vec3); 4] = [
-        ("top", Vec3::Z, Vec3::Y),          // Blick −Z, oben +Y
-        ("front", Vec3::Y, Vec3::Z),        // Blick +Y (front = +Y? siehe App)
+        ("top", Vec3::Z, Vec3::Y),   // Blick −Z, oben +Y
+        ("front", Vec3::Y, Vec3::Z), // Blick +Y (front = +Y? siehe App)
         ("left", Vec3::X, Vec3::Z),
         ("iso", Vec3::new(1.0, -1.0, 1.0), Vec3::Z),
     ];
@@ -400,9 +423,7 @@ fn render_ppm(
             }
         }
         // Screen-Bounds.
-        let project = |p: Vec3| -> (f32, f32, f32) {
-            (p.dot(right), p.dot(up2), p.dot(view))
-        };
+        let project = |p: Vec3| -> (f32, f32, f32) { (p.dot(right), p.dot(up2), p.dot(view)) };
         let mut smin = (f32::MAX, f32::MAX);
         let mut smax = (f32::MIN, f32::MIN);
         let mut proj: Vec<[(f32, f32, f32); 3]> = Vec::with_capacity(tris.len());
@@ -416,8 +437,8 @@ fn render_ppm(
             }
             proj.push(pt);
         }
-        let scale = ((w as f32 - 20.0) / (smax.0 - smin.0))
-            .min((h as f32 - 20.0) / (smax.1 - smin.1));
+        let scale =
+            ((w as f32 - 20.0) / (smax.0 - smin.0)).min((h as f32 - 20.0) / (smax.1 - smin.1));
         let to_px = |a: f32, b: f32| -> (f32, f32) {
             (
                 (a - smin.0) * scale + 10.0,
@@ -435,10 +456,7 @@ fn render_ppm(
             let shade = (lam * 230.0) as u8;
             // Blick von +view-Seite: sichtbar, wenn Normale entgegen view zeigt.
             let front = n.dot(view) < 0.0;
-            let px: Vec<(f32, f32)> = pt
-                .iter()
-                .map(|&(a, b, _)| to_px(a, b))
-                .collect();
+            let px: Vec<(f32, f32)> = pt.iter().map(|&(a, b, _)| to_px(a, b)).collect();
             let zs: [f32; 3] = [pt[0].2, pt[1].2, pt[2].2];
             let minx = px.iter().fold(f32::MAX, |m, p| m.min(p.0)).max(0.0) as usize;
             let maxx = (px.iter().fold(f32::MIN, |m, p| m.max(p.0)) as usize + 1).min(w);
@@ -518,9 +536,7 @@ fn render_frame_ppm(bodies: &[step::Body], frame: glam::Mat3, name: &str) {
             ]);
         }
     }
-    let project = |p: Vec3| -> (f32, f32, f32) {
-        (p.dot(right), p.dot(up2), p.dot(view_dir))
-    };
+    let project = |p: Vec3| -> (f32, f32, f32) { (p.dot(right), p.dot(up2), p.dot(view_dir)) };
     let mut smin = (f32::MAX, f32::MAX);
     let mut smax = (f32::MIN, f32::MIN);
     let mut proj: Vec<[(f32, f32, f32); 3]> = Vec::with_capacity(tris.len());
@@ -534,8 +550,7 @@ fn render_frame_ppm(bodies: &[step::Body], frame: glam::Mat3, name: &str) {
         }
         proj.push(pt);
     }
-    let scale = ((w as f32 - 20.0) / (smax.0 - smin.0))
-        .min((h as f32 - 20.0) / (smax.1 - smin.1));
+    let scale = ((w as f32 - 20.0) / (smax.0 - smin.0)).min((h as f32 - 20.0) / (smax.1 - smin.1));
     let to_px = |a: f32, b: f32| -> (f32, f32) {
         (
             (a - smin.0) * scale + 10.0,
@@ -550,10 +565,7 @@ fn render_frame_ppm(bodies: &[step::Body], frame: glam::Mat3, name: &str) {
         let lam = n.dot(view_dir).abs() * 0.7 + 0.3;
         let shade = (lam * 230.0) as u8;
         let front = n.dot(view_dir) < 0.0;
-        let px: Vec<(f32, f32)> = pt
-            .iter()
-            .map(|&(a, b, _)| to_px(a, b))
-            .collect();
+        let px: Vec<(f32, f32)> = pt.iter().map(|&(a, b, _)| to_px(a, b)).collect();
         let zs: [f32; 3] = [pt[0].2, pt[1].2, pt[2].2];
         let minx = (px.iter().fold(f32::MAX, |m, p| m.min(p.0)).max(0.0)) as usize;
         let maxx = ((px.iter().fold(f32::MIN, |m, p| m.max(p.0)) as usize + 1).min(w));

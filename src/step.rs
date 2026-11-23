@@ -63,8 +63,8 @@ pub struct StepDocument {
 
 impl StepDocument {
     pub fn from_path(path: &Path) -> Result<Self, String> {
-        let bytes = std::fs::read(path)
-            .map_err(|e| format!("Datei konnte nicht gelesen werden: {e}"))?;
+        let bytes =
+            std::fs::read(path).map_err(|e| format!("Datei konnte nicht gelesen werden: {e}"))?;
         let content = decode_step_bytes(bytes);
         let content = repair_step_text(&content);
         let (content, _) = prefer_3d_curves(&content);
@@ -199,11 +199,7 @@ fn fan(ring: &[usize]) -> Vec<[usize; 3]> {
 /// Hier wird die Gerade in lokalen Koordinaten so verschoben/verlängert, dass
 /// alle Randpunkte der Fläche innerhalb `[0, 1]` liegen. Die Fläche selbst
 /// bleibt unverändert; nur ihre Parametrisierung wird erweitert.
-fn widen_revolved_surface(
-    surface: &mut Surface,
-    boundary_vertices: &[Point3],
-    single_loop: bool,
-) {
+fn widen_revolved_surface(surface: &mut Surface, boundary_vertices: &[Point3], single_loop: bool) {
     let Surface::ElementarySurface(elementary) = surface else {
         return;
     };
@@ -318,8 +314,8 @@ fn widen_revolved_line(
         origin,
         axis,
     );
-    let mut replacement =
-        truck_stepio::r#in::alias::re_exports::Processor::new(widened).transformed(*cone.transform());
+    let mut replacement = truck_stepio::r#in::alias::re_exports::Processor::new(widened)
+        .transformed(*cone.transform());
     if !cone.orientation() {
         replacement.invert();
     }
@@ -366,7 +362,9 @@ pub fn tessellate(doc: &StepDocument, quality: Quality) -> Result<TessellatedPar
         let mut cshell = match table.to_compressed_shell(shell) {
             Ok(c) => c,
             Err(e) => {
-                warnings.push(format!("Shell {shell_index} konnte nicht gelesen werden: {e:?}"));
+                warnings.push(format!(
+                    "Shell {shell_index} konnte nicht gelesen werden: {e:?}"
+                ));
                 continue;
             }
         };
@@ -419,24 +417,25 @@ pub fn tessellate(doc: &StepDocument, quality: Quality) -> Result<TessellatedPar
         // getrimmten Kegel-/Zylinderflächen robuster als trucks
         // Nearest-Parameter-Suche. Nicht-analytische Flächen (B-Spline,
         // Torus, …) oder Fehler einer Fläche fallen auf truck zurück.
-        let analytic: Vec<Option<crate::mesher::FaceMesh>> = if std::env::var_os("ROHTEIL_NO_ANALYTIC").is_some() {
-            Vec::new()
-        } else {
-            cshell
-                .faces
-                .iter()
-                .enumerate()
-                .map(|(face_i, face)| {
-                    crate::mesher::tessellate_face(
-                        face,
-                        &cshell.vertices,
-                        &cshell.edges,
-                        quality.tolerance(),
-                        &format!("face{}", face_i),
-                    )
-                })
-                .collect()
-        };
+        let analytic: Vec<Option<crate::mesher::FaceMesh>> =
+            if std::env::var_os("ROHTEIL_NO_ANALYTIC").is_some() {
+                Vec::new()
+            } else {
+                cshell
+                    .faces
+                    .iter()
+                    .enumerate()
+                    .map(|(face_i, face)| {
+                        crate::mesher::tessellate_face(
+                            face,
+                            &cshell.vertices,
+                            &cshell.edges,
+                            quality.tolerance(),
+                            &format!("face{}", face_i),
+                        )
+                    })
+                    .collect()
+            };
 
         let mut vertices: Vec<Vec3> = Vec::new();
         let mut triangles: Vec<[usize; 3]> = Vec::new();
@@ -448,7 +447,10 @@ pub fn tessellate(doc: &StepDocument, quality: Quality) -> Result<TessellatedPar
             let mask_ok = match std::env::var("ROHTEIL_FACE_MASK") {
                 Ok(spec) => spec.split(',').any(|part| {
                     let mut it = part.splitn(2, '-');
-                    let lo: usize = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or(usize::MAX);
+                    let lo: usize = it
+                        .next()
+                        .and_then(|s| s.trim().parse().ok())
+                        .unwrap_or(usize::MAX);
                     let hi: usize = it.next().and_then(|s| s.trim().parse().ok()).unwrap_or(lo);
                     face_i >= lo && face_i <= hi
                 }),
@@ -461,9 +463,12 @@ pub fn tessellate(doc: &StepDocument, quality: Quality) -> Result<TessellatedPar
             // sonst die Nearest-Parameter-Artefakte (Kegel-Fächer).
             if let Some(amesh) = analytic.get(face_i).and_then(|m| m.as_ref()) {
                 let base = vertices.len();
-                vertices.extend(amesh.vertices.iter().map(|p| {
-                    Vec3::new(p.x as f32, p.y as f32, p.z as f32)
-                }));
+                vertices.extend(
+                    amesh
+                        .vertices
+                        .iter()
+                        .map(|p| Vec3::new(p.x as f32, p.y as f32, p.z as f32)),
+                );
                 let world = |idx: usize| vertices[base + idx];
                 for tri in &amesh.triangles {
                     let (pa, pb, pc) = (world(tri[0]), world(tri[1]), world(tri[2]));
@@ -617,9 +622,7 @@ pub fn tessellate(doc: &StepDocument, quality: Quality) -> Result<TessellatedPar
             .last()
             .map(|w| format!(" Letzter Fehler: {w}"))
             .unwrap_or_default();
-        return Err(format!(
-            "STEP enthielt keine anzeigbare Geometrie.{hint}"
-        ));
+        return Err(format!("STEP enthielt keine anzeigbare Geometrie.{hint}"));
     }
 
     Ok(TessellatedPart { bodies, warnings })
@@ -802,7 +805,10 @@ fn detect_unit_scale(source: &str) -> f32 {
 }
 
 /// Headless-Hilfsfunktion: STEP laden, tessellieren und ausrichten.
-pub fn load_aligned(path: &Path, quality: Quality) -> Result<(Vec<Body>, crate::stock::StockResult), String> {
+pub fn load_aligned(
+    path: &Path,
+    quality: Quality,
+) -> Result<(Vec<Body>, crate::stock::StockResult), String> {
     let doc = StepDocument::from_path(path)?;
     let part = tessellate(&doc, quality)?;
     let mut bodies = part.bodies;

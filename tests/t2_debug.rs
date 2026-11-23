@@ -2,14 +2,14 @@
 //! verdächtiger Fläche ab. Hilft, die Flächen zu identifizieren, deren
 //! Triangulation Artefakte erzeugt.
 
-#[path = "../src/step.rs"]
-mod step;
 #[path = "../src/mesh.rs"]
 mod mesh;
-#[path = "../src/stock.rs"]
-mod stock;
 #[path = "../src/mesher.rs"]
 mod mesher;
+#[path = "../src/step.rs"]
+mod step;
+#[path = "../src/stock.rs"]
+mod stock;
 
 use glam::Vec3;
 use std::path::Path;
@@ -29,8 +29,12 @@ fn debug_faces() {
 
     for (si, shell) in table.shell.values().enumerate() {
         let mut cshell = table.to_compressed_shell(shell).unwrap();
-        println!("Shell {si}: {} Flächen, {} Vertices, {} Kanten",
-            cshell.faces.len(), cshell.vertices.len(), cshell.edges.len());
+        println!(
+            "Shell {si}: {} Flächen, {} Vertices, {} Kanten",
+            cshell.faces.len(),
+            cshell.vertices.len(),
+            cshell.edges.len()
+        );
 
         for fi in 0..cshell.faces.len() {
             let mut single = cshell.clone();
@@ -83,18 +87,29 @@ fn debug_faces() {
                     }
                     continue;
                 }
-                let Some(boundary) = face.boundaries.first() else { continue };
+                let Some(boundary) = face.boundaries.first() else {
+                    continue;
+                };
                 let mut ring_points: Vec<Point3> = Vec::new();
                 for edge_idx in boundary {
                     let edge = &tessellated.edges[edge_idx.index];
                     let mut points = edge.curve.0.clone();
-                    if !edge_idx.orientation { points.reverse(); }
+                    if !edge_idx.orientation {
+                        points.reverse();
+                    }
                     for p in points {
-                        if ring_points.last().is_some_and(|l| (l - p).magnitude() < 1e-9) { continue; }
+                        if ring_points
+                            .last()
+                            .is_some_and(|l| (l - p).magnitude() < 1e-9)
+                        {
+                            continue;
+                        }
                         ring_points.push(p);
                     }
                 }
-                if ring_points.len() < 3 { continue; }
+                if ring_points.len() < 3 {
+                    continue;
+                }
                 let base = verts.len();
                 verts.extend(ring_points.iter().copied());
                 for i in 1..ring_points.len() - 1 {
@@ -133,7 +148,10 @@ fn debug_faces() {
                     fi, out_dir.display(), fi);
                 write_obj(&out_dir.join(format!("face_{fi:03}.obj")), &verts, &tris);
                 // Randloop ebenfalls als Objekt für Vergleich
-                write_loop_obj(&out_dir.join(format!("face_{fi:03}_loop.obj")), &boundary_vertices);
+                write_loop_obj(
+                    &out_dir.join(format!("face_{fi:03}_loop.obj")),
+                    &boundary_vertices,
+                );
             }
         }
     }

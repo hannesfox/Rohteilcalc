@@ -25,10 +25,7 @@ pub struct MeshData {
 /// weniger als ca. 40° aufeinandertreffen, gelten als eine glatte Oberfläche
 /// (Zylinder-/Kegelwand). Echte Kanten (>= 40°) bleiben scharf, damit z. B.
 /// die Deckfläche nicht in die Bohrungswand "verläuft".
-pub fn compute_corner_normals(
-    vertices: &[Vec3],
-    triangles: &[[usize; 3]],
-) -> Vec<[Vec3; 3]> {
+pub fn compute_corner_normals(vertices: &[Vec3], triangles: &[[usize; 3]]) -> Vec<[Vec3; 3]> {
     const SMOOTH_COS: f32 = 0.766; // cos(40°)
 
     let face_normals: Vec<Vec3> = triangles
@@ -117,9 +114,7 @@ pub fn build_feature_edges(vertices: &[Vec3], triangles: &[[usize; 3]]) -> Vec<[
         }
         for (a, b) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
             let key = if a <= b { [a, b] } else { [b, a] };
-            let e = map
-                .entry(key)
-                .or_insert((0, Vec3::ZERO, Vec3::ZERO, true));
+            let e = map.entry(key).or_insert((0, Vec3::ZERO, Vec3::ZERO, true));
             e.0 += 1;
             if e.0 == 1 {
                 e.1 = face_normals[ti];

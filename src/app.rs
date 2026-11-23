@@ -3,12 +3,11 @@
 use crate::camera::{OrbitCamera, StandardView};
 use crate::mesh::generate_sample_milled_part;
 use crate::renderer::{
-    ScModel, ScSession, SceneState, ViewCallback, ViewMode, demo_scene, make_frame,
-    render_camera,
+    demo_scene, make_frame, render_camera, ScModel, ScSession, SceneState, ViewCallback, ViewMode,
 };
-use crate::step::Quality;
 use crate::shadow;
 use crate::space_mouse;
+use crate::step::Quality;
 use eframe::egui::{self, Sense, Stroke};
 use glam::Vec3;
 use std::path::PathBuf;
@@ -228,7 +227,11 @@ impl AppState {
             return;
         };
         let label = self.dxf_label_text();
-        let label = if label.is_empty() { None } else { Some(label.as_str()) };
+        let label = if label.is_empty() {
+            None
+        } else {
+            Some(label.as_str())
+        };
         match shadow::write_dxf(&path, &shadow.polygon, &shadow.inner_polygons, label) {
             Ok(()) => {
                 self.status = format!(
@@ -302,7 +305,9 @@ impl AppState {
         // der Wert noch dem letzten Auto-Vorschlag entspricht (manuelle
         // Änderungen bleiben erhalten).
         let proposal = Self::dxf_label_proposal_value(&model);
-        if self.dxf_label_value.trim().is_empty() || self.dxf_label_value == self.dxf_label_auto_value {
+        if self.dxf_label_value.trim().is_empty()
+            || self.dxf_label_value == self.dxf_label_auto_value
+        {
             self.dxf_label_value = proposal.clone();
         }
         self.dxf_label_auto_value = proposal;
@@ -349,8 +354,10 @@ impl AppState {
                 })
             }))
             .unwrap_or_else(|_| {
-                Err("Beim Verarbeiten der STEP-Geometrie ist ein interner Fehler aufgetreten."
-                    .to_string())
+                Err(
+                    "Beim Verarbeiten der STEP-Geometrie ist ein interner Fehler aufgetreten."
+                        .to_string(),
+                )
             });
             let _ = tx.send(LoadMsg { result, fit_camera });
         });
@@ -430,8 +437,12 @@ impl AppState {
     /// Szene mit neuen Anzeigeeinstellungen synchron neu bauen.
     pub(crate) fn rebuild(&mut self) {
         if let Some(session) = &self.session {
-            match session.model_with_down(self.mode, self.show_stock, self.allowances, self.align_down)
-            {
+            match session.model_with_down(
+                self.mode,
+                self.show_stock,
+                self.allowances,
+                self.align_down,
+            ) {
                 Ok(model) => self.set_model(model),
                 Err(e) => {
                     self.status = format!("Szene neu bauen: {e}");
@@ -587,8 +598,11 @@ impl AppState {
                 return;
             }
         };
-        let Some(model) = self.model.clone() else { return; };
-        let Some((mesh, tri_face, hit)) = crate::pick::pick_part_face(&model, &self.camera, rect, pos)
+        let Some(model) = self.model.clone() else {
+            return;
+        };
+        let Some((mesh, tri_face, hit)) =
+            crate::pick::pick_part_face(&model, &self.camera, rect, pos)
         else {
             self.status = "Innenkontur: keine Bauteilfläche getroffen.".to_string();
             self.status_is_error = true;
@@ -688,7 +702,11 @@ impl AppState {
             seen_centers.push(c);
             let contour = if offset_mm > 1e-6 {
                 let off = crate::shadow::offset_polygon_inward(&poly, offset_mm);
-                if off.len() >= 3 { off } else { poly }
+                if off.len() >= 3 {
+                    off
+                } else {
+                    poly
+                }
             } else {
                 poly
             };
@@ -699,7 +717,8 @@ impl AppState {
             added += 1;
         }
         if added == 0 {
-            self.status = "Innenkontur: erkannte Kontur konnte nicht übernommen werden.".to_string();
+            self.status =
+                "Innenkontur: erkannte Kontur konnte nicht übernommen werden.".to_string();
             self.status_is_error = true;
             return;
         }
@@ -744,8 +763,7 @@ impl AppState {
     }
 
     fn viewport(&mut self, ui: &mut egui::Ui) {
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
 
         let moving = response.dragged() || ui.input(|i| i.smooth_scroll_delta.y != 0.0);
         let shift = ui.input(|i| i.modifiers.shift);
@@ -757,12 +775,17 @@ impl AppState {
         // Zoom exp(1.5)/s, Orbit 250 px/s, Roll 2 rad/s), der Drehtisch
         // über orbit_on_screen, so dass er trotz Kantung in Bildschirm-
         // richtung lenkt.
-        if let Some(m) = self.spacemouse.as_mut().and_then(|sm| sm.tick(ui.ctx(), rect.height())) {
+        if let Some(m) = self
+            .spacemouse
+            .as_mut()
+            .and_then(|sm| sm.tick(ui.ctx(), rect.height()))
+        {
             self.camera.pan(m.pan_x, m.pan_y, rect.height());
             // m.zoom trägt die Framezeit bereits (Schub·step); SolidCraft
             // rechnet identisch exp(−1.5·Schub·seconds) — hier also nicht
             // noch einmal mit der Zeit multiplizieren.
-            self.camera.zoom_factor((-f64::from(m.zoom) * 1.5).exp() as f32);
+            self.camera
+                .zoom_factor((-f64::from(m.zoom) * 1.5).exp() as f32);
             if m.orbit_x != 0.0 || m.orbit_y != 0.0 || m.roll != 0.0 {
                 self.active_view = None; // freie Fahrt — keine Standardansicht aktiv
             }
@@ -828,11 +851,13 @@ impl AppState {
             Some(st) if st.key == revision => st,
             _ => {
                 let mut st = match (&self.shadow, self.shadow_preview) {
-                    (Some(s), true) => SceneState::new(&crate::renderer::scene_with_shadow_contour(
-                        &model.scene,
-                        s,
-                        model.part_size.z + 0.25,
-                    )),
+                    (Some(s), true) => {
+                        SceneState::new(&crate::renderer::scene_with_shadow_contour(
+                            &model.scene,
+                            s,
+                            model.part_size.z + 0.25,
+                        ))
+                    }
                     _ => SceneState::new(&model.scene),
                 };
                 st.set_key(revision);
@@ -846,7 +871,10 @@ impl AppState {
             state,
             &model,
             &cam,
-            [rect.width() * ui.ctx().pixels_per_point(), rect.height() * ui.ctx().pixels_per_point()],
+            [
+                rect.width() * ui.ctx().pixels_per_point(),
+                rect.height() * ui.ctx().pixels_per_point(),
+            ],
             moving,
         );
 
@@ -878,14 +906,23 @@ impl AppState {
                     let wy = shadow.origin[1] + (min_y + max_y) * 0.5;
                     let world = solidcore_record::Vec3::new(wx as f64, wy as f64, z as f64);
                     let radius = (model.scene.radius.max((model.radius as f64) * 1.05)).max(1.0);
-                    if let Some((sx, sy, _depth)) = cam.to_screen(world, rect.width() as f64, rect.height() as f64, radius) {
+                    if let Some((sx, sy, _depth)) =
+                        cam.to_screen(world, rect.width() as f64, rect.height() as f64, radius)
+                    {
                         let pos = egui::pos2(rect.left() + sx as f32, rect.top() + sy as f32);
                         let painter = ui.painter_at(rect);
                         let font = egui::FontId::proportional(14.0);
-                        let galley = painter.layout_no_wrap(text.to_string(), font, crate::ui::theme::PREVIEW);
+                        let galley = painter.layout_no_wrap(
+                            text.to_string(),
+                            font,
+                            crate::ui::theme::PREVIEW,
+                        );
                         let text_pos = pos - galley.size() * 0.5;
                         painter.rect_filled(
-                            egui::Rect::from_min_size(text_pos - egui::vec2(4.0, 2.0), galley.size() + egui::vec2(8.0, 4.0)),
+                            egui::Rect::from_min_size(
+                                text_pos - egui::vec2(4.0, 2.0),
+                                galley.size() + egui::vec2(8.0, 4.0),
+                            ),
                             3.0,
                             colors.bg.gamma_multiply(0.65),
                         );
@@ -920,11 +957,7 @@ impl AppState {
         let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
         if hovering {
             let painter = ui.painter_at(rect);
-            painter.rect_filled(
-                rect,
-                0.0,
-                colors.dnd_fill,
-            );
+            painter.rect_filled(rect, 0.0, colors.dnd_fill);
             painter.rect_stroke(
                 rect.shrink(12.0),
                 10.0,

@@ -23,6 +23,10 @@ use std::collections::HashMap;
 
 use crate::renderer::ScModel;
 
+/// Erkannte Segmente der Silhouette-Extras für manuelle Auswahl (Anker:
+/// Offene Polylinie + Start-/Endpunkt; siehe `extract_face_xy_loops`).
+type LoopSegs = Vec<(Vec<[f32; 2]>, [f32; 2], [f32; 2])>;
+
 /// Fertige Schattenkontur (alles in mm).
 #[derive(Clone)]
 pub struct ShadowResult {
@@ -111,11 +115,19 @@ pub fn from_mesh(
     const INF: u16 = u16::MAX;
     let mut field = vec![INF; (w * h) as usize];
     for t in triangles {
-        fill_triangle(&mut field, w, h, res, bmin, pad, [
-            &positions[t[0] as usize],
-            &positions[t[1] as usize],
-            &positions[t[2] as usize],
-        ]);
+        fill_triangle(
+            &mut field,
+            w,
+            h,
+            res,
+            bmin,
+            pad,
+            [
+                &positions[t[0] as usize],
+                &positions[t[1] as usize],
+                &positions[t[2] as usize],
+            ],
+        );
     }
 
     // Chamfer-Abstandsfeld (zwei Durchläufe, 3/4-Kosten) in Zellen — nur
@@ -172,7 +184,10 @@ pub fn from_mesh(
     }
 
     let node = |i: i64, j: i64| -> [f32; 2] {
-        [bmin[0] + (i as f32 - pad as f32) * res, bmin[1] + (j as f32 - pad as f32) * res]
+        [
+            bmin[0] + (i as f32 - pad as f32) * res,
+            bmin[1] + (j as f32 - pad as f32) * res,
+        ]
     };
     let corners = |i: i64, j: i64| -> f32 {
         let vals = [
@@ -182,10 +197,7 @@ pub fn from_mesh(
             get(&dist, i, j),
         ];
         // Chamfer-Einheiten → Zellen (/3) → mm (* res).
-        (u32::from(vals[0])
-            + u32::from(vals[1])
-            + u32::from(vals[2])
-            + u32::from(vals[3])) as f32
+        (u32::from(vals[0]) + u32::from(vals[1]) + u32::from(vals[2]) + u32::from(vals[3])) as f32
             / 4.0
             / 3.0
             * res
@@ -232,7 +244,11 @@ pub fn from_mesh(
     }
     let node_val = |i: i64, j: i64| -> f32 {
         let n = nodes[(j * (w + 1) + i) as usize];
-        if n.is_nan() { corners(i, j) } else { n }
+        if n.is_nan() {
+            corners(i, j)
+        } else {
+            n
+        }
     };
 
     // -------------------------------------------------------
@@ -297,7 +313,11 @@ pub fn from_mesh(
                     f1 = fn_new;
                 }
             }
-            let point = if f0.abs() < f1.abs() { (t0, f0) } else { (t1, f1) };
+            let point = if f0.abs() < f1.abs() {
+                (t0, f0)
+            } else {
+                (t1, f1)
+            };
             return Some([
                 (f64::from(pa[0]) + f64::from(pb[0] - pa[0]) * point.0) as f32,
                 (f64::from(pa[1]) + f64::from(pb[1] - pa[1]) * point.0) as f32,
@@ -311,8 +331,18 @@ pub fn from_mesh(
     let mut segments: Vec<([f32; 2], [f32; 2])> = Vec::new();
     for j in 0..h {
         for i in 0..w - 1 {
-            let (p00, p10, p11, p01) = (node(i, j), node(i + 1, j), node(i + 1, j + 1), node(i, j + 1));
-            let (v00, v10, v11, v01) = (node_val(i, j), node_val(i + 1, j), node_val(i + 1, j + 1), node_val(i, j + 1));
+            let (p00, p10, p11, p01) = (
+                node(i, j),
+                node(i + 1, j),
+                node(i + 1, j + 1),
+                node(i, j + 1),
+            );
+            let (v00, v10, v11, v01) = (
+                node_val(i, j),
+                node_val(i + 1, j),
+                node_val(i + 1, j + 1),
+                node_val(i, j + 1),
+            );
             let bottom = crossing(p00, v00, p10, v10);
             let right = crossing(p10, v10, p11, v11);
             let top = crossing(p01, v01, p11, v11);
@@ -381,7 +411,9 @@ pub fn from_mesh(
         loop {
             let tail = key(*chain.last().unwrap());
             let Some(list) = near.get(&tail) else { break };
-            let Some(&(id, point)) = list.iter().find(|(s, _)| !used[*s]) else { break };
+            let Some(&(id, point)) = list.iter().find(|(s, _)| !used[*s]) else {
+                break;
+            };
             if key(point) == origin {
                 break; // geschlossen — Startpunkt nicht doppelt nehmen
             }
@@ -471,7 +503,11 @@ pub fn from_mesh(
         area: area(&polygon).abs(),
         polygon,
         inner_polygons,
-        inner_offset: if inner_min_mm > 0.0 { inner_offset_mm } else { 0.0 },
+        inner_offset: if inner_min_mm > 0.0 {
+            inner_offset_mm
+        } else {
+            0.0
+        },
         perimeter,
         res,
         origin: mid,
@@ -534,11 +570,7 @@ fn fit_circle(poly: &[[f32; 2]]) -> Option<([f64; 2], f64)> {
         t[2] += z;
     }
     // [Sxx Sxy Sx; Sxy Syy Sy; Sx Sy Sz] · [a b c]' = [Sxz Syz Sz]'
-    let m = [
-        [s[3], s[4], s[0]],
-        [s[4], s[5], s[1]],
-        [s[0], s[1], s[2]],
-    ];
+    let m = [[s[3], s[4], s[0]], [s[4], s[5], s[1]], [s[0], s[1], s[2]]];
     let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
         - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
         + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
@@ -608,10 +640,8 @@ fn fit_circle(poly: &[[f32; 2]]) -> Option<([f64; 2], f64)> {
 fn circle_points(center: [f64; 2], radius: f64) -> Vec<[f32; 2]> {
     let r = radius.max(0.2);
     let err = 0.01_f64.min(r * 0.05);
-    let n = (((std::f64::consts::PI
-        / (1.0 - err / r).acos().max(1e-6)) as usize)
-        .clamp(48, 512))
-    .next_power_of_two();
+    let n = (((std::f64::consts::PI / (1.0 - err / r).acos().max(1e-6)) as usize).clamp(48, 512))
+        .next_power_of_two();
     let n = n.min(512);
     (0..n)
         .map(|i| {
@@ -651,9 +681,9 @@ fn simplify_rdp(poly: &[[f32; 2]], tol: f32) -> Vec<[f32; 2]> {
         let len2 = dx * dx + dy * dy;
         let mut best_i = i0;
         let mut best_d2 = -1.0_f64;
-        for i in (i0 + 1)..i1 {
-            let px = f64::from(poly[i][0]);
-            let py = f64::from(poly[i][1]);
+        for (i, p) in poly.iter().enumerate().take(i1).skip(i0 + 1) {
+            let px = f64::from(p[0]);
+            let py = f64::from(p[1]);
             let d2 = if len2 < 1e-18 {
                 (px - ax) * (px - ax) + (py - ay) * (py - ay)
             } else {
@@ -695,9 +725,15 @@ pub fn offset_polygon_inward(poly: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
     let sign = if a >= 0.0 { 1.0 } else { -1.0 };
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
-        let p0 = [f64::from(poly[(i + n - 1) % n][0]), f64::from(poly[(i + n - 1) % n][1])];
+        let p0 = [
+            f64::from(poly[(i + n - 1) % n][0]),
+            f64::from(poly[(i + n - 1) % n][1]),
+        ];
         let p1 = [f64::from(poly[i][0]), f64::from(poly[i][1])];
-        let p2 = [f64::from(poly[(i + 1) % n][0]), f64::from(poly[(i + 1) % n][1])];
+        let p2 = [
+            f64::from(poly[(i + 1) % n][0]),
+            f64::from(poly[(i + 1) % n][1]),
+        ];
         let e1 = [p1[0] - p0[0], p1[1] - p0[1]];
         let e2 = [p2[0] - p1[0], p2[1] - p1[1]];
         let l1 = (e1[0] * e1[0] + e1[1] * e1[1]).sqrt();
@@ -723,7 +759,10 @@ pub fn offset_polygon_inward(poly: &[[f32; 2]], d: f32) -> Vec<[f32; 2]> {
         let mlen = ((pt[0] - p1[0]).powi(2) + (pt[1] - p1[1]).powi(2)).sqrt();
         let limit = d.abs() * 4.0 + (l1.min(l2)) * 0.5;
         let pt = if mlen > limit && mlen > 1e-9 {
-            [p1[0] + (pt[0] - p1[0]) / mlen * limit, p1[1] + (pt[1] - p1[1]) / mlen * limit]
+            [
+                p1[0] + (pt[0] - p1[0]) / mlen * limit,
+                p1[1] + (pt[1] - p1[1]) / mlen * limit,
+            ]
         } else {
             pt
         };
@@ -770,11 +809,7 @@ pub fn extract_cylinder_xy(
     // Achse: Richtung a, für die |n·a| über alle Normalen minimal ist
     // (Zylindernormalen stehen senkrecht zur Achse). Grobe Suche über
     // Kandidaten (Weltachsen + aus Normalpaaren) genügt für CAD-Bohrungen.
-    let mut candidates: Vec<[f64; 3]> = vec![
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ];
+    let mut candidates: Vec<[f64; 3]> = vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
     for i in 0..nrm.len().min(24) {
         for j in (i + 1)..nrm.len().min(24) {
             let c = [
@@ -791,7 +826,10 @@ pub fn extract_cylinder_xy(
     let mut best_axis = [0.0, 0.0, 1.0];
     let mut best_score = f64::INFINITY;
     for a in &candidates {
-        let score: f64 = nrm.iter().map(|n| (n[0] * a[0] + n[1] * a[1] + n[2] * a[2]).abs()).sum::<f64>()
+        let score: f64 = nrm
+            .iter()
+            .map(|n| (n[0] * a[0] + n[1] * a[1] + n[2] * a[2]).abs())
+            .sum::<f64>()
             / nrm.len() as f64;
         if score < best_score {
             best_score = score;
@@ -819,7 +857,11 @@ pub fn extract_cylinder_xy(
     for p in &pts {
         let v = [p[0] - mean[0], p[1] - mean[1], p[2] - mean[2]];
         let along = v[0] * a[0] + v[1] * a[1] + v[2] * a[2];
-        let radial = [v[0] - along * a[0], v[1] - along * a[1], v[2] - along * a[2]];
+        let radial = [
+            v[0] - along * a[0],
+            v[1] - along * a[1],
+            v[2] - along * a[2],
+        ];
         let r = (radial[0] * radial[0] + radial[1] * radial[1] + radial[2] * radial[2]).sqrt();
         if r > 1e-6 {
             // nächster Achspunkt für dieses p: p - radial
@@ -846,7 +888,11 @@ pub fn extract_cylinder_xy(
     for p in &pts {
         let v = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
         let along = v[0] * a[0] + v[1] * a[1] + v[2] * a[2];
-        let radial = [v[0] - along * a[0], v[1] - along * a[1], v[2] - along * a[2]];
+        let radial = [
+            v[0] - along * a[0],
+            v[1] - along * a[1],
+            v[2] - along * a[2],
+        ];
         let r = (radial[0] * radial[0] + radial[1] * radial[1] + radial[2] * radial[2]).sqrt();
         let d = (r - radius).abs();
         var += d * d;
@@ -892,9 +938,11 @@ pub fn extract_face_xy_loops(
     }
     let tol = 0.05_f32; // mm, Endpunkt-Toleranz beim Verketten
     let tol2 = tol * tol;
-    let mut segs: Vec<(Vec<[f32; 2]>, [f32; 2], [f32; 2])> = Vec::new();
+    let mut segs: LoopSegs = Vec::new();
     for ei in edge_ids {
-        let Some(pl) = mesh.edges.get(ei) else { continue };
+        let Some(pl) = mesh.edges.get(ei) else {
+            continue;
+        };
         if pl.len() < 2 {
             continue;
         }
@@ -918,7 +966,9 @@ pub fn extract_face_xy_loops(
         let closed_tol2 = (tol * 2.0).powi(2);
         for _ in 0..(segs.len() + 2) {
             let start_pt = *cur.first().unwrap();
-            if cur.len() >= 3 && (end[0] - start_pt[0]).powi(2) + (end[1] - start_pt[1]).powi(2) < closed_tol2 {
+            if cur.len() >= 3
+                && (end[0] - start_pt[0]).powi(2) + (end[1] - start_pt[1]).powi(2) < closed_tol2
+            {
                 break;
             }
             let mut found = None;
@@ -1038,6 +1088,9 @@ pub fn prepare_inner(poly: &[[f32; 2]], offset_mm: f32, res: f32) -> Option<Vec<
     Some(clean)
 }
 
+/// Ergebnis von `silhouette_inner_loops`: Innenzüge + Ursprung + Rasterauflösung.
+type InnerLoops = Result<(Vec<Vec<[f32; 2]>>, [f32; 2], f32), String>;
+
 /// Alle Innenzüge der Silhouette (ohne Größenfilter) plus Ursprung und
 /// Rasterauflösung — Basis für die manuelle Auswahl per Klick, wenn der
 /// angeklickte Wandzug selbst keine nutzbare Kontur liefert (z. B. Wand
@@ -1047,7 +1100,7 @@ pub fn silhouette_inner_loops(
     positions: &[[f32; 3]],
     triangles: &[[u32; 3]],
     expand: f32,
-) -> Result<(Vec<Vec<[f32; 2]>>, [f32; 2], f32), String> {
+) -> InnerLoops {
     if triangles.is_empty() {
         return Err("keine Bauteilgeometrie zum Projizieren".to_string());
     }
@@ -1218,7 +1271,16 @@ impl TriBins {
                 }
             }
         }
-        Self { cell, ox: bmin[0], oy: bmin[1], nx, ny, radius, tris, cells }
+        Self {
+            cell,
+            ox: bmin[0],
+            oy: bmin[1],
+            nx,
+            ny,
+            radius,
+            tris,
+            cells,
+        }
     }
 
     /// Das Bucket eines Punkts (geklemmt an Ränder).
@@ -1281,7 +1343,10 @@ fn seg_dist2(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
 fn dist_pt_tri(p: [f64; 2], tri: &[[f64; 2]; 3]) -> f64 {
     let (a, b, c) = (tri[0], tri[1], tri[2]);
     let edges = || -> f64 {
-        seg_dist2(p, a, b).min(seg_dist2(p, b, c)).min(seg_dist2(p, c, a)).sqrt()
+        seg_dist2(p, a, b)
+            .min(seg_dist2(p, b, c))
+            .min(seg_dist2(p, c, a))
+            .sqrt()
     };
     // Entartet: nur Distanz zu der Strecke.
     let area2 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
@@ -1435,7 +1500,14 @@ mod tests {
         ];
         edges
             .iter()
-            .map(|(a, b)| seg_dist2([f64::from(p[0]), f64::from(p[1])], [f64::from(a[0]), f64::from(a[1])], [f64::from(b[0]), f64::from(b[1])]).sqrt())
+            .map(|(a, b)| {
+                seg_dist2(
+                    [f64::from(p[0]), f64::from(p[1])],
+                    [f64::from(a[0]), f64::from(a[1])],
+                    [f64::from(b[0]), f64::from(b[1])],
+                )
+                .sqrt()
+            })
             .fold(f64::INFINITY, f64::min)
     }
 
@@ -1504,7 +1576,11 @@ mod tests {
             })
             .collect();
         let simp = simplify_rdp(&soft, 0.3);
-        assert!(simp.len() < soft.len() / 4, "RDP zu wortkarg: {}", simp.len());
+        assert!(
+            simp.len() < soft.len() / 4,
+            "RDP zu wortkarg: {}",
+            simp.len()
+        );
         for p in &simp {
             // Ellipse-Punkt-Nähe grob: Abstand zur (20,15)-Skalen-Ellipse
             let e = ((f64::from(p[0]) / 20.0).powi(2) + (f64::from(p[1]) / 15.0).powi(2)).sqrt();
@@ -1545,25 +1621,37 @@ mod tests {
                 [1, 2, 6, 5],
             ];
             for q in &quads {
-                triangles.push([
-                    base + q[0],
-                    base + q[1],
-                    base + q[2],
-                ]);
-                triangles.push([
-                    base + q[0],
-                    base + q[2],
-                    base + q[3],
-                ]);
+                triangles.push([base + q[0], base + q[1], base + q[2]]);
+                triangles.push([base + q[0], base + q[2], base + q[3]]);
             }
         }
         let mut positions: Vec<[f32; 3]> = Vec::new();
         let mut triangles: Vec<[u32; 3]> = Vec::new();
         // Platte mit geschlossener Nut: x −10..10, y 5..35 bleibt frei.
-        push_box(&mut positions, &mut triangles, [-50.0, 0.0, 0.0], [40.0, 40.0, 10.0]);
-        push_box(&mut positions, &mut triangles, [10.0, 0.0, 0.0], [40.0, 40.0, 10.0]);
-        push_box(&mut positions, &mut triangles, [-10.0, 0.0, 0.0], [20.0, 5.0, 10.0]);
-        push_box(&mut positions, &mut triangles, [-10.0, 35.0, 0.0], [20.0, 5.0, 10.0]);
+        push_box(
+            &mut positions,
+            &mut triangles,
+            [-50.0, 0.0, 0.0],
+            [40.0, 40.0, 10.0],
+        );
+        push_box(
+            &mut positions,
+            &mut triangles,
+            [10.0, 0.0, 0.0],
+            [40.0, 40.0, 10.0],
+        );
+        push_box(
+            &mut positions,
+            &mut triangles,
+            [-10.0, 0.0, 0.0],
+            [20.0, 5.0, 10.0],
+        );
+        push_box(
+            &mut positions,
+            &mut triangles,
+            [-10.0, 35.0, 0.0],
+            [20.0, 5.0, 10.0],
+        );
 
         let (loops, origin, res) = silhouette_inner_loops(&positions, &triangles, 0.0).unwrap();
         assert!(res.is_finite() && res > 0.0);
@@ -1623,7 +1711,8 @@ mod tests {
     /// Exakt konturparallel: jeder Konturpunkt ist genau „expand“ vom
     /// Bauteilrechteck entfernt (gerade Stücke wie Kreisbögen).
     #[test]
-    fn contour_is_exactly_parallel() {        let (positions, triangles) = box_mesh(20.0, 10.0, 5.0);
+    fn contour_is_exactly_parallel() {
+        let (positions, triangles) = box_mesh(20.0, 10.0, 5.0);
         let result = from_mesh(&positions, &triangles, 3.0, 0.0, 0.0).unwrap();
         let mut worst = 0.0_f64;
         for p in &result.polygon {
@@ -1660,7 +1749,11 @@ mod tests {
             dmax <= eps * 3.0 + 1e-4,
             "Kontur zu weit weg von der Silhouette: größter Abstand {dmax} mm"
         );
-        assert!(result.area > 200.0, "Fläche {} mm² unter Rechteckfläche", result.area);
+        assert!(
+            result.area > 200.0,
+            "Fläche {} mm² unter Rechteckfläche",
+            result.area
+        );
     }
 
     #[test]
@@ -1678,4 +1771,3 @@ mod tests {
         assert!(text.contains("$INSUNITS"));
     }
 }
-

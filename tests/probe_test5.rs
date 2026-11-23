@@ -2,14 +2,14 @@
 //! Ergebnis der verfeinerten Ausrichtung, 2D-Footprint-OBB und rendert
 //! Orientierungen als PNG (target/).
 
-#[path = "../src/step.rs"]
-mod step;
-#[path = "../src/stock.rs"]
-mod stock;
 #[path = "../src/mesh.rs"]
 mod mesh;
 #[path = "../src/mesher.rs"]
 mod mesher;
+#[path = "../src/step.rs"]
+mod step;
+#[path = "../src/stock.rs"]
+mod stock;
 
 use glam::Vec3;
 use std::path::Path;
@@ -37,7 +37,10 @@ fn probe_test5_alignment() {
         println!("keine Ausrichtung");
         return;
     };
-    println!("ALIGNED size: x={:.2} y={:.2} z={:.2}", size.x, size.y, size.z);
+    println!(
+        "ALIGNED size: x={:.2} y={:.2} z={:.2}",
+        size.x, size.y, size.z
+    );
 
     // Ist die Platte im aligned-Frame flach (Z klein)? Extents gemessen.
     // Kandidat: 2D-Footprint-OBB über konvexe Hülle (Rotating Calipers:
@@ -57,12 +60,19 @@ fn probe_test5_alignment() {
     let hull = convex_hull(&mut pts2);
     println!("  hull points: {}", hull.len());
     let (best_area, best_angle) = min_area_rectangle(&hull);
-    println!("  min-area footprint: {:.1} mm² · Kantenwinkel zu X: {:.1}°",
-        best_area, best_angle.to_degrees());
+    println!(
+        "  min-area footprint: {:.1} mm² · Kantenwinkel zu X: {:.1}°",
+        best_area,
+        best_angle.to_degrees()
+    );
 
     // Und der aligned Frame selbst: Footprint-Fläche + Rechteckwinkel.
     let (a_cur, ang_cur) = footprint_area_and_angle(&hull);
-    println!("  aktueller aligned Footprint: {:.1} mm² · Winkel {:.1}°", a_cur, ang_cur.to_degrees());
+    println!(
+        "  aktueller aligned Footprint: {:.1} mm² · Winkel {:.1}°",
+        a_cur,
+        ang_cur.to_degrees()
+    );
 
     render(&part.bodies, "raw", glam::Mat3::IDENTITY);
     let vis = rt.transpose();
@@ -81,7 +91,10 @@ fn probe_test5_alignment() {
     let e = mx - mn;
     println!(
         "FOOTPRINT-OBB Frame: x={:.2} y={:.2} z={:.2} (Vol {:.0})",
-        e.x, e.y, e.z, (e.x * e.y * e.z) as f64
+        e.x,
+        e.y,
+        e.z,
+        (e.x * e.y * e.z) as f64
     );
 }
 
@@ -108,7 +121,11 @@ fn footprint_area_and_angle(hull: &[(f32, f32)]) -> (f32, f32) {
 }
 
 fn convex_hull(pts: &mut [(f32, f32)]) -> Vec<(f32, f32)> {
-    pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap().then(a.1.partial_cmp(&b.1).unwrap()));
+    pts.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .unwrap()
+            .then(a.1.partial_cmp(&b.1).unwrap())
+    });
     let mut h: Vec<(f32, f32)> = Vec::new();
     for &p in pts.iter() {
         while h.len() >= 2 && cross(&h[h.len() - 2], &h[h.len() - 1], &p) <= 0.0 {
@@ -165,7 +182,11 @@ fn min_area_rectangle(hull: &[(f32, f32)]) -> (f32, f32) {
 /// Rendert das Teil in einem Welt-Rahmen (Iso + Draufsicht) als PNG.
 fn render(bodies: &[step::Body], name: &str, frame: glam::Mat3) {
     for (suffix, view_dir, up_dir) in [
-        ("iso", frame * Vec3::new(1.0, -1.0, 1.0).normalize(), frame * Vec3::Z),
+        (
+            "iso",
+            frame * Vec3::new(1.0, -1.0, 1.0).normalize(),
+            frame * Vec3::Z,
+        ),
         ("top", frame * Vec3::Z, frame * Vec3::Y),
     ] {
         let w = 480usize;
@@ -182,9 +203,7 @@ fn render(bodies: &[step::Body], name: &str, frame: glam::Mat3) {
                 ]);
             }
         }
-        let project = |p: Vec3| -> (f32, f32, f32) {
-            (p.dot(right), p.dot(up2), p.dot(view_dir))
-        };
+        let project = |p: Vec3| -> (f32, f32, f32) { (p.dot(right), p.dot(up2), p.dot(view_dir)) };
         let mut smin = (f32::MAX, f32::MAX);
         let mut smax = (f32::MIN, f32::MIN);
         let mut proj: Vec<[(f32, f32, f32); 3]> = Vec::with_capacity(tris.len());
@@ -198,8 +217,8 @@ fn render(bodies: &[step::Body], name: &str, frame: glam::Mat3) {
             }
             proj.push(pt);
         }
-        let scale = ((w as f32 - 20.0) / (smax.0 - smin.0))
-            .min((h as f32 - 20.0) / (smax.1 - smin.1));
+        let scale =
+            ((w as f32 - 20.0) / (smax.0 - smin.0)).min((h as f32 - 20.0) / (smax.1 - smin.1));
         let to_px = |a: f32, b: f32| -> (f32, f32) {
             (
                 (a - smin.0) * scale + 10.0,

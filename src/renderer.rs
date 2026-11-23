@@ -14,19 +14,19 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use solidcraft_geom as _;
-use solidcraft_gpu::view::{Frame, GpuScene, GpuTarget, Renderer, analysis_uniform};
-use solidcraft_engine::Session;
+use solidcore_record::Vec3 as RcVec3;
 use solidcraft_engine::view::Palette;
+use solidcraft_engine::Session;
+use solidcraft_geom as _;
+use solidcraft_geom::prelude::*;
+use solidcraft_gpu::view::{analysis_uniform, Frame, GpuScene, GpuTarget, Renderer};
 use solidcraft_render::Camera as RenderCamera;
 use solidcraft_render::SceneMesh;
-use solidcraft_geom::prelude::*;
-use solidcore_record::Vec3 as RcVec3;
 
-use glam::{Mat3, Vec3};
 use crate::camera::OrbitCamera;
 use crate::mesh::MeshData;
 use crate::stock::{StockParams, StockResult};
+use glam::{Mat3, Vec3};
 
 // ---------------------------------------------------------
 // Anzeigemodi
@@ -108,7 +108,7 @@ pub struct ScSession {
 
 /// DisplayQuality (vor `doc.open` gesetzt) nach Rohteil-Qualität.
 fn set_quality(q: crate::step::Quality) {
-    use solidcraft_engine::doc::display_quality::{DisplayQuality, set_current};
+    use solidcraft_engine::doc::display_quality::{set_current, DisplayQuality};
     let id = match q {
         crate::step::Quality::Low => "coarse",
         crate::step::Quality::Medium => "normal",
@@ -183,7 +183,12 @@ impl ScSession {
                 .doc
                 .face_colors(body)
                 .into_iter()
-                .map(|(f, l)| (f as u32, solidcraft_render::Rgb(l.color[0], l.color[1], l.color[2])))
+                .map(|(f, l)| {
+                    (
+                        f as u32,
+                        solidcraft_render::Rgb(l.color[0], l.color[1], l.color[2]),
+                    )
+                })
                 .collect();
             let opacity = s.doc.model_body_opacity(body) as f32;
             let closed = body.is_closed();
@@ -234,7 +239,10 @@ impl ScSession {
                 hatch: solidcraft_render::hatch::Hatch(0),
             });
             scene.lines.extend(lines);
-            bodies.push(ScBodyInfo { name: body.name.clone(), visible });
+            bodies.push(ScBodyInfo {
+                name: body.name.clone(),
+                visible,
+            });
         }
         build_view(scene, mode, show_stock, bodies, &stock_params, align_down)
     }
@@ -443,7 +451,11 @@ pub fn build_view(
     }
     add_ground(&mut scene, bmin, bmax);
 
-    let edge_count: usize = scene.lines.iter().map(|l| l.points.len().saturating_sub(1)).sum();
+    let edge_count: usize = scene
+        .lines
+        .iter()
+        .map(|l| l.points.len().saturating_sub(1))
+        .sum();
     // Clip-Radius der Szene: wie `view::scene_with_guides` (diagonal/2, mind.
     // 10 mm) mit Puffer für den Zielabstand (hier: Ziel ≈ Zentrum).
     scene.radius = (ext.length() as f64 * 0.5).max(10.0) + radius as f64;
@@ -594,14 +606,44 @@ fn add_stock_box(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3, c
     // durch das Werkstück scheint) — dieselbe Farbenwahl wie bisher.
     let quads: [[Vec3; 4]; 6] = [
         // unten, oben
-        [Vec3::new(bmin.x, bmin.y, bmin.z), Vec3::new(bmax.x, bmin.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmin.z), Vec3::new(bmin.x, bmax.y, bmin.z)],
-        [Vec3::new(bmin.x, bmin.y, bmax.z), Vec3::new(bmax.x, bmin.y, bmax.z), Vec3::new(bmax.x, bmax.y, bmax.z), Vec3::new(bmin.x, bmax.y, bmax.z)],
+        [
+            Vec3::new(bmin.x, bmin.y, bmin.z),
+            Vec3::new(bmax.x, bmin.y, bmin.z),
+            Vec3::new(bmax.x, bmax.y, bmin.z),
+            Vec3::new(bmin.x, bmax.y, bmin.z),
+        ],
+        [
+            Vec3::new(bmin.x, bmin.y, bmax.z),
+            Vec3::new(bmax.x, bmin.y, bmax.z),
+            Vec3::new(bmax.x, bmax.y, bmax.z),
+            Vec3::new(bmin.x, bmax.y, bmax.z),
+        ],
         // vorne, hinten
-        [Vec3::new(bmin.x, bmin.y, bmin.z), Vec3::new(bmax.x, bmin.y, bmin.z), Vec3::new(bmax.x, bmin.y, bmax.z), Vec3::new(bmin.x, bmin.y, bmax.z)],
-        [Vec3::new(bmin.x, bmax.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmax.z), Vec3::new(bmin.x, bmax.y, bmax.z)],
+        [
+            Vec3::new(bmin.x, bmin.y, bmin.z),
+            Vec3::new(bmax.x, bmin.y, bmin.z),
+            Vec3::new(bmax.x, bmin.y, bmax.z),
+            Vec3::new(bmin.x, bmin.y, bmax.z),
+        ],
+        [
+            Vec3::new(bmin.x, bmax.y, bmin.z),
+            Vec3::new(bmax.x, bmax.y, bmin.z),
+            Vec3::new(bmax.x, bmax.y, bmax.z),
+            Vec3::new(bmin.x, bmax.y, bmax.z),
+        ],
         // links, rechts
-        [Vec3::new(bmin.x, bmin.y, bmin.z), Vec3::new(bmin.x, bmax.y, bmin.z), Vec3::new(bmin.x, bmax.y, bmax.z), Vec3::new(bmin.x, bmin.y, bmax.z)],
-        [Vec3::new(bmax.x, bmin.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmin.z), Vec3::new(bmax.x, bmax.y, bmax.z), Vec3::new(bmax.x, bmin.y, bmax.z)],
+        [
+            Vec3::new(bmin.x, bmin.y, bmin.z),
+            Vec3::new(bmin.x, bmax.y, bmin.z),
+            Vec3::new(bmin.x, bmax.y, bmax.z),
+            Vec3::new(bmin.x, bmin.y, bmax.z),
+        ],
+        [
+            Vec3::new(bmax.x, bmin.y, bmin.z),
+            Vec3::new(bmax.x, bmax.y, bmin.z),
+            Vec3::new(bmax.x, bmax.y, bmax.z),
+            Vec3::new(bmax.x, bmin.y, bmax.z),
+        ],
     ];
     let mut mesh = solidcraft_geom::Mesh::default();
     for (tri, q) in (0_u32..).zip(quads.iter()) {
@@ -665,13 +707,7 @@ fn add_stock_box(scene: &mut solidcraft_render::Scene, bmin: Vec3, bmax: Vec3, c
 
 /// Rohteil-Zylinder (Rundmaterial) als glasiger Körper samt Randlinien:
 /// Achse von `a` nach `b` (auf der Mittellinie), Radius `r`.
-fn add_stock_cylinder(
-    scene: &mut solidcraft_render::Scene,
-    axis: usize,
-    a: Vec3,
-    b: Vec3,
-    r: f32,
-) {
+fn add_stock_cylinder(scene: &mut solidcraft_render::Scene, axis: usize, a: Vec3, b: Vec3, r: f32) {
     const SEGS: u32 = 64;
     const OPACITY: f32 = 0.28;
     let rc = |v: Vec3| RcVec3::new(v.x as f64, v.y as f64, v.z as f64);
@@ -701,8 +737,8 @@ fn add_stock_cylinder(
         mesh.positions.push(*pos);
         mesh.normals.push(*normal);
     }
-    let cap_a = 2 * SEGS;         // Deckelmittelpunkt bei `a`
-    let cap_b = 2 * SEGS + 1;     // Deckelmittelpunkt bei `b`
+    let cap_a = 2 * SEGS; // Deckelmittelpunkt bei `a`
+    let cap_b = 2 * SEGS + 1; // Deckelmittelpunkt bei `b`
     mesh.positions.push(rc(a));
     mesh.normals.push(rc(-axial));
     mesh.positions.push(rc(b));
@@ -881,9 +917,15 @@ fn mesh_data_to_mesh(m: &MeshData) -> solidcraft_geom::Mesh {
     // Weiche Normalen: Flächennormalen über die Ecken summieren, normalisieren.
     let mut sums = vec![RcVec3::ZERO; out.positions.len()];
     for t in &out.triangles {
-        let Some(a) = out.positions.get(t[0] as usize).copied() else { continue };
-        let Some(b) = out.positions.get(t[1] as usize).copied() else { continue };
-        let Some(c) = out.positions.get(t[2] as usize).copied() else { continue };
+        let Some(a) = out.positions.get(t[0] as usize).copied() else {
+            continue;
+        };
+        let Some(b) = out.positions.get(t[1] as usize).copied() else {
+            continue;
+        };
+        let Some(c) = out.positions.get(t[2] as usize).copied() else {
+            continue;
+        };
         let n = (b - a).cross(c - a);
         for idx in t {
             if let Some(s) = sums.get_mut(*idx as usize) {
@@ -947,7 +989,9 @@ impl SceneState {
     /// Szene für eine neue Revision anlegen (Neu-Upload beim nächsten Bild).
     pub fn new(scene: &solidcraft_render::Scene) -> Self {
         Self {
-            slot: Arc::new(Mutex::new(Some(solidcraft_gpu::capture::scene_geometry(scene)))),
+            slot: Arc::new(Mutex::new(Some(solidcraft_gpu::capture::scene_geometry(
+                scene,
+            )))),
             key: 0,
         }
     }
@@ -1000,7 +1044,12 @@ pub fn make_frame(
         analysis_colors: [0.0; 36],
         access: None,
         outline: true,
-        eye: [eye[0], eye[1], eye[2], if cam.fov > 0.0 { 1.0 } else { 0.0 }],
+        eye: [
+            eye[0],
+            eye[1],
+            eye[2],
+            if cam.fov > 0.0 { 1.0 } else { 0.0 },
+        ],
         ao_radius: 0.0,
         ao_samples: if moving {
             solidcraft_gpu::view::AO_SAMPLES_MOVING
@@ -1040,7 +1089,9 @@ impl egui_wgpu::CallbackTrait for ViewCallback {
         pass: &mut wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
-        let Some(res) = resources.get::<Renderer>() else { return };
+        let Some(res) = resources.get::<Renderer>() else {
+            return;
+        };
         let vp = info.viewport_in_pixels();
         res.paint(
             &self.0,
@@ -1055,12 +1106,18 @@ impl egui_wgpu::CallbackTrait for ViewCallback {
     }
 }
 
-/// Ein nicht abgefangener GPU-Fehler wird geloggt, nie ein Panic (wie bei
-/// SolidCraft #5486): ein invalider Aufruf darf die App nicht schließen.
+/// Ein nicht abgefangener GPU-Fehler wird ins Start-Log geschrieben
+/// (Fix 3) und nie ein Panic (wie bei SolidCraft #5486): ein invalider
+/// Aufruf darf die App nicht schließen. Terminale Läufe sehen zusätzlich
+/// die ersten 8 Fehler auf stderr.
 fn log_uncaptured_errors(device: &wgpu::Device) {
     use std::sync::atomic::{AtomicU32, Ordering};
     let reported = Arc::new(AtomicU32::new(0));
     device.on_uncaptured_error(Arc::new(move |e: wgpu::Error| {
+        // Jedes einzelne wgpu-Error ins Log schreiben — das Log ist das
+        // Gesprächspartner beim silent-Start-Problem; eprintln! ist bei
+        // Windows-Doppelklick ohne Konsolen-Subsystem ohnehin verloren.
+        crate::diag::log_line(&format!("GPU-Fehler: {e}"));
         if reported.fetch_add(1, Ordering::Relaxed) < 8 {
             eprintln!("GPU: {e}");
         }
