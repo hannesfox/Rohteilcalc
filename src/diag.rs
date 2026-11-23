@@ -287,17 +287,28 @@ pub fn diag_report() -> Result<String, String> {
     Ok(format_diag_report(&data))
 }
 
+/// Text auf stdout ausgeben – best effort: Auf Windows-Release ohne
+/// Konsolen-Subsystem ist stdout eine leere Pipe ("The pipe is being
+/// closed", os error 232), und `println!` paniziert statt still zu
+/// starten.stdout best-effort schreiben; das Log ist die zuverlässige
+/// Ausgabe (Fix 2/4).
+pub fn print_safe(text: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(text.as_bytes());
+    let _ = stdout.flush();
+}
+
 /// `--diag` ausführen: Bericht auf stdout UND ins Log (Fix 4).
 pub fn run_diag() -> bool {
     match diag_report() {
         Ok(report) => {
-            println!("{report}");
-            println!("Logdatei: {}", log_path().display());
+            print_safe(&format!("{report}\nLogdatei: {}\n", log_path().display()));
             log_line(&format!("Diagnose-Bericht:\n{report}"));
             true
         }
         Err(err) => {
-            eprintln!("--diag fehlgeschlagen: {err}");
+            print_safe(&format!("--diag fehlgeschlagen: {err}\n"));
             log_line(&format!("--diag fehlgeschlagen: {err}"));
             false
         }

@@ -431,13 +431,13 @@ fn render_cli(
     let (w, h) = (1400u32, 1000u32);
     let pixels = renderer::render_offscreen(&model.scene, &cam, w, h)?;
     write_bmp(out, w, h, &pixels)?;
-    println!(
-        "Render: {} Körper, {} Dreiecke, {} Kantenpolylines -> {} ({w}×{h})",
+    diag::print_safe(&format!(
+        "Render: {} Körper, {} Dreiecke, {} Kantenpolylines -> {} ({w}×{h})\n",
         model.bodies.len(),
         model.triangle_count,
         model.edge_count,
         out.display()
-    );
+    ));
     Ok(())
 }
 
