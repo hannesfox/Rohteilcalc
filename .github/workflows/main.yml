@@ -52,16 +52,26 @@ jobs:
           $x64 = "$env:TEMP/dxc_x64"
           Expand-Archive -Path "$env:TEMP/dxc_2026_09_29.zip" -DestinationPath $x64 -Force
           # x64-Varianten nach dist/ neben dem .exe (arm64/x86 bleiben unberührt).
-          $dlls = Get-ChildItem -Recurse -LiteralPath $x64 -Include @("dxcompiler.dll", "dxil.dll") |
-            Where-Object { $_.DirectoryName -like "*x64" }
+          $dlls = Get-ChildItem -Recurse -File -LiteralPath $x64 |
+            Where-Object {
+              $_.Name -in @("dxcompiler.dll", "dxil.dll") -and $_.DirectoryName -like "*x64"
+            }
           foreach ($dll in $dlls) {
             Copy-Item -Force -LiteralPath $dll.FullName -Destination (Join-Path dist $dll.Name)
           }
-          # Redistributions-Lizenz (LICENSE-LLVM / MIT / MS) als DXC-LICENSE.txt.
+          # Redistributions-Lizenz (LICENSE-LLVM / LICENSE-MS / MIT-Lizenz) als
+          # DXC-LICENSE.txt. Spellings: LICENSE-MIT.txt und LICENCE-MIT.txt.
+          $licFiles = Get-ChildItem -Recurse -File -LiteralPath $x64 |
+            Where-Object { $_.Name -match "^(LICENSE|LICENCE)-(LLVM|MS|MIT)\.txt$" }
           $licDest = "dist/DXC-LICENSE.txt"
           Remove-Item -Force $licDest -ErrorAction SilentlyContinue
-          foreach ($lic in Get-ChildItem -Recurse -LiteralPath $x64 -Include @("LICENSE-LLVM.txt", "LICENCE-MIT.txt", "LICENSE-MS.txt")) {
+          $licCount = 0
+          foreach ($lic in $licFiles) {
+            $licCount++
             Add-Content -Path $licDest -Value ("=== $($lic.Name) ===`n" + (Get-Content -Raw -LiteralPath $lic.FullName))
+          }
+          if ($licCount -eq 0) {
+            Write-Error "keine Lizenzdateien in der DXC-Zip gefunden (erwartet: LICENSE-LLVM.txt, LICENSE-MS.txt, LICENSE-MIT/LICENCE-MIT.txt)"; exit 1
           }
 
       - name: Paket schnüren
@@ -74,7 +84,7 @@ jobs:
           # DXC v1.9.2609: dxcompiler.dll + dxil.dll + DXC-LICENSE.txt kommen
           # (aus den DXC-Schritten darüber) mit ins Zip – und dann auf den
           # Zielrechner.
-          Compress-Archive -Path dist/* -DestinationPath RohteilCalc-windows-x64.zip -Force
+          Compress-Archive -Path dist/* -DestinationPath Rohteilcalc-windows-x64.zip -Force
 
       - name: DXC-DLLs prüfen
         shell: pwsh
@@ -87,14 +97,16 @@ jobs:
               Write-Output "FEHLER: $dll fehlt"; $fehler = $true
             }
           }
+          if (Test-Path dist/DXC-LICENSE.txt) {
+            if ((Get-Item dist/DXC-LICENSE.txt).Length -eq 0) {
+              Write-Output "FEHLER: dist/DXC-LICENSE.txt ist leer"; $fehler = $true
+            } else {
+              Write-Output "OK: dist/DXC-LICENSE.txt  SHA256: $(Get-FileHash -Path dist/DXC-LICENSE.txt -Algorithm SHA256).Hash"
+            }
+          } else {
+            Write-Output "FEHLER: dist/DXC-LICENSE.txt fehlt"; $fehler = $true
+          }
           if ($fehler) { exit 1 }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: RohteilCalc-windows-x64
-          path: Rohteilcalc-windows-x64.zip
-          if-no-files-found: error
 
       - name: "Smoke-Test: Rohteilcalc.exe --diag"
         shell: pwsh
@@ -105,21 +117,49 @@ jobs:
             Write-Error "Smoke-Test: --diag beendete mit Exit-Code $LASTEXITCODE"
             exit 1
           }
-          # Log für den Artifact einsammeln (%TEMP% bzw. %RUNNER_TEMP%).
-          $log = "$env:TEMP/Rohteilcalc.log"
-          if (-not (Test-Path $log)) { $log = "$env:RUNNER_TEMP/Rohteilcalc.log" }
-          if (Test-Path $log) {
-            Copy-Item -Force $log "$env:GITHUB_WORKSPACE/rohteilcalc-startup-diagnose.log"
-          } else {
-            Write-Output "Warnung: Rohteilcalc.log nicht gefunden (Temp: '$env:TEMP', RunnerTemp: '$env:RUNNER_TEMP')"
+
+      - name: "Smoke-Test: Rendering mit gebündeltem DXC"
+        shell: pwsh
+        env:
+          # Erzwingt den DXC-Pfad (dxcompiler.dll neben dem .exe); Windows-Runner
+          # bieten DX12 meist nur per WARP-Adapter an.
+          WGPU_BACKEND: "dx12"
+        run: |
+          dist\Rohteilcalc.exe --render examples\ci_cube.step dist\smoke.bmp
+          if ($LASTEXITCODE -ne 0) { Write-Error "--render Exit-Code $LASTEXITCODE"; exit 1 }
+          if (-not (Test-Path dist\smoke.bmp)) { Write-Error "smoke.bmp fehlt"; exit 1 }
+          if ((Get-Item dist\smoke.bmp).Length -lt 100000) { Write-Error "smoke.bmp verdächtig klein"; exit 1 }
+
+      - name: Diagnose-Logs sammeln
+        if: always()
+        shell: pwsh
+        run: |
+          # Rohteilcalc.log (letzter Lauf: --render) und Rohteilcalc.prev.log
+          # (Vorläufer: --diag) ins Workspace holen (%TEMP% bzw. %RUNNER_TEMP%).
+          foreach ($pair in @(
+            @("Rohteilcalc.log", "rohteilcalc-startup-diagnose.log"),
+            @("Rohteilcalc.prev.log", "rohteilcalc-startup-diagnose.prev.log")
+          )) {
+            $src = "$env:TEMP/$($pair[0])"
+            if (-not (Test-Path $src)) { $src = "$env:RUNNER_TEMP/$($pair[0])" }
+            if (Test-Path $src) { Copy-Item -Force $src "$env:GITHUB_WORKSPACE/$($pair[1])" }
           }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rohteilcalc-windows-x64
+          path: Rohteilcalc-windows-x64.zip
+          if-no-files-found: error
 
       - name: Startup-Diagnose hochladen
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: Rohteilcalc-startup-diagnose
-          path: rohteilcalc-startup-diagnose.log
+          path: |
+            rohteilcalc-startup-diagnose.log
+            rohteilcalc-startup-diagnose.prev.log
           if-no-files-found: warn
 
   macos:
@@ -226,7 +266,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Rohteilcalc (aktueller Stand)
+          name: RohteilCalc (aktueller Stand)
+          fail_on_unmatched_files: true
           body: |
             Automatischer Build des neuesten Stands von `main`.
             Windows: `Rohteilcalc-windows-x64.zip` entpacken und `Rohteilcalc.exe` starten.
@@ -239,6 +280,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
           files: |
             artifacts/Rohteilcalc-windows-x64/Rohteilcalc-windows-x64.zip
             artifacts/Rohteilcalc-macos-universal/Rohteilcalc-macos-universal.zip

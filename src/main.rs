@@ -48,7 +48,7 @@ fn main() -> eframe::Result<()> {
     // Mit dem Eltern-Terminal verbinden (nur Windows-Release, also ohne
     // eingebautes Konsolen-Subsystem): Der Aufrufer sieht dann die Ausgaben
     // der CLI-Modi (`--inspect`, `--render`, `--space-probe`, `--diag`)
-    // wieder, z. B. `RohteilCalc.exe --inspect datei.step` aus PowerShell.
+    // wieder, z. B. `Rohteilcalc.exe --inspect datei.step` aus PowerShell.
     #[cfg(all(target_os = "windows", not(debug_assertions)))]
     unsafe {
         windows_sys::Win32::System::Console::AttachConsole(

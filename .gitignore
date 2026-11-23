@@ -41,3 +41,7 @@ Bildschirmfoto*.png
 *.Step
 *.SteP
 *.STEP
+
+# Ausnahme: Start-Diagnose-Fixture für den Windows-CI-Smoke-Test
+# (nicht von den Git-eigenen *.step-Patterns ausgeschlossen).
+!examples/ci_cube.step
