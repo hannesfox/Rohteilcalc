@@ -111,12 +111,14 @@ jobs:
       - name: "Smoke-Test: Rohteilcalc.exe --diag"
         shell: pwsh
         run: |
-          $report = dist\Rohteilcalc.exe --diag 2>&1
-          Write-Output $report
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Smoke-Test: --diag beendete mit Exit-Code $LASTEXITCODE"
-            exit 1
-          }
+          # GUI-Subsystem-Exe: PowerShell wartet nicht auf sie und setzt
+          # $LASTEXITCODE nicht – deshalb Start-Process + WaitForExit (mit
+          # Timeout) und das echte Process.ExitCode prüfen.stdout auslesen.
+          $p = Start-Process -FilePath "dist\Rohteilcalc.exe" -ArgumentList "--diag" `
+            -NoNewWindow -PassThru -RedirectStandardOutput "diag-out.txt" -RedirectStandardError "diag-err.txt"
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Error "--diag Timeout (2 min)"; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "--diag beendete mit Exit-Code $($p.ExitCode)"; exit 1 }
+          Get-Content "diag-out.txt","diag-err.txt" -Raw 2>$null | Write-Output
 
       - name: "Smoke-Test: Rendering mit gebündeltem DXC"
         shell: pwsh
@@ -125,8 +127,16 @@ jobs:
           # bieten DX12 meist nur per WARP-Adapter an.
           WGPU_BACKEND: "dx12"
         run: |
-          dist\Rohteilcalc.exe --render examples\ci_cube.step dist\smoke.bmp
-          if ($LASTEXITCODE -ne 0) { Write-Error "--render Exit-Code $LASTEXITCODE"; exit 1 }
+          # GUI-Subsystem-Exe: PowerShell wartet nicht auf sie und setzt
+          # $LASTEXITCODE nicht – deshalb Start-Process + WaitForExit (mit
+          # Timeout) und das echte Process.ExitCode prüfen.stdout/Errors
+          # auslesen.
+          $p = Start-Process -FilePath "dist\Rohteilcalc.exe" `
+            -ArgumentList "--render examples\ci_cube.step dist\smoke.bmp" `
+            -NoNewWindow -PassThru -RedirectStandardOutput "render-out.txt" -RedirectStandardError "render-err.txt"
+          if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Error "--render Timeout (5 min)"; exit 1 }
+          if ($p.ExitCode -ne 0) { Write-Error "--render beendete mit Exit-Code $($p.ExitCode)"; exit 1 }
+          Get-Content "render-out.txt","render-err.txt" -Raw 2>$null | Write-Output
           if (-not (Test-Path dist\smoke.bmp)) { Write-Error "smoke.bmp fehlt"; exit 1 }
           if ((Get-Item dist\smoke.bmp).Length -lt 100000) { Write-Error "smoke.bmp verdächtig klein"; exit 1 }
 
