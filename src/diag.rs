@@ -123,7 +123,16 @@ fn bool_str(b: bool) -> &'static str {
 pub fn enumerate_adapters() -> Vec<wgpu::Adapter> {
     let mut desc = solidcraft_gpu::instance_descriptor_from_env();
     desc.backends = wgpu::Backends::all();
-    let instance = wgpu::Instance::new(desc);
+    let instance = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        wgpu::Instance::new(desc)
+    })) {
+        Ok(instance) => instance,
+        Err(p) => {
+            let msg = format!("Instance::new panicked: {p:?}");
+            log_line(&msg);
+            return Vec::new();
+        }
+    };
     pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
 }
 
@@ -231,9 +240,26 @@ fn probe_device(
     }))
 }
 
-/// Alle I/O für `--diag` sammeln (panics → Ergebnis, inkl. 0 Adapter).
+/// Alle I/O für `--diag` sammeln: Adapter-Aufzählung und Proben, jede
+/// Adapter-Behandlung einzeln abgesichert (Panic → Eintrag mit der Panic-
+/// Botschaft, weitere Adapter weiter bearbeiten).
 pub fn gather_diag() -> DiagData {
     let exe = current_exe_display();
+    let mut adapters = Vec::new();
+    for adapter in enumerate_adapters() {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| adapter_entry(&adapter))) {
+            Ok(entry) => adapters.push(entry),
+            Err(p) => {
+                let msg = format!("Adapter-Panic: {p:?}");
+                log_line(&msg);
+                adapters.push(AdapterEntry {
+                    info_line: msg.clone(),
+                    limits_line: "-".into(),
+                    probe: "Panic".into(),
+                });
+            }
+        }
+    }
     DiagData {
         version: env!("CARGO_PKG_VERSION").to_string(),
         exe: exe.clone(),
@@ -241,7 +267,7 @@ pub fn gather_diag() -> DiagData {
         dlls: dxc_dll_lines(Path::new(&exe)),
         dx12_compiler: format!("{:?}", solidcraft_gpu::dx12_compiler()),
         env: env_lines(),
-        adapters: enumerate_adapters().iter().map(adapter_entry).collect(),
+        adapters,
         warning: None,
     }
 }
