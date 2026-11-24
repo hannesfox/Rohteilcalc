@@ -1147,8 +1147,24 @@ pub fn install(cc: &eframe::CreationContext<'_>) -> Result<(), String> {
         tess: false,
         oit: false,
     };
-    let res = Renderer::with_window_target(&rs.device, scene, window, None);
+    // Pipeline-Erstellung darf nie stillschweigend scheitern: ein Panic aus
+    // der wgpu/naga-Pipeline wird gefangen, protokolliert und als Fehler an
+    // den Start zurückgegeben (statt eines unerklärlichen Fenster-Schließens).
+    let res = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Renderer::with_window_target(&rs.device, scene, window, None)
+    })) {
+        Ok(res) => res,
+        Err(panic) => {
+            let message = format!("Renderer::with_window_target panicked: {panic:?}");
+            crate::diag::log_pipeline_error(&message);
+            return Err(message);
+        }
+    };
     rs.renderer.write().callback_resources.insert(res);
+    crate::diag::log_line(&format!(
+        "Phase: Render-Pipelines installiert (Format {:?}, Tiefe {:?}, Samples {samples})",
+        rs.target_format, depth
+    ));
     Ok(())
 }
 

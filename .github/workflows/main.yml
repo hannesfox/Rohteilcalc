@@ -24,119 +24,123 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build
+      - name: Build (x86_64-pc-windows-msvc)
         # crt-static: die C-Laufzeit wird in die .exe eingebaut, damit auf dem
         # Zielrechner kein Visual-C++-Redistributable installiert sein muss.
         env:
           RUSTFLAGS: "-C target-feature=+crt-static"
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target x86_64-pc-windows-msvc
 
-      - name: DXC v1.9.2609 herunterladen und SHA256 prüfen
+      - name: EXE prüfen
         shell: pwsh
         run: |
-          # Pin: neueste stabile DXC-Veröffentlichung (microsoft/DirectXShaderCompiler).
-          # Der SHA256 des ZIPs wird mit Get-FileHash geprüft (Job schlägt
-          # fehl, wenn es nicht übereinstimmt).
-          $url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609/dxc_2026_09_29.zip"
-          $zip = "$env:TEMP/dxc_2026_09_29.zip"
-          Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
-          $expected = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
-          $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
-          Write-Output "DXC-Zip-SHA256: $actual (erwartet: $expected)"
-          if ($actual -ine $expected) { Write-Error "SHA256-Mismatch bei $url"; exit 1 }
+          $exe = "target/x86_64-pc-windows-msvc/release/rohteil_calc.exe"
+          if (-not (Test-Path $exe)) { Write-Error "EXE fehlt: $exe"; exit 1 }
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          if ($bytes.Length -lt 1000000 -or $bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) {
+            Write-Error "keine gültige PE-EXE (MZ fehlt)"; exit 1
+          }
+          $item = Get-Item $exe
+          Write-Output "EXE: $($item.FullName)  $($item.Length) Bytes  Version $($item.VersionInfo.ProductVersion)"
+          if ($item.VersionInfo.ProductName -ne "Rohteilcalc") {
+            Write-Error "Windows-Ressourcen (Icon/ProductName) fehlen"; exit 1
+          }
 
-      - name: DXC-DLLs und Lizenz in dist/ kopieren
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $x64 = "$env:TEMP/dxc_x64"
-          Expand-Archive -Path "$env:TEMP/dxc_2026_09_29.zip" -DestinationPath $x64 -Force
-          # x64-Varianten nach dist/ neben dem .exe (arm64/x86 bleiben unberührt).
-          $dlls = Get-ChildItem -Recurse -File -LiteralPath $x64 |
-            Where-Object {
-              $_.Name -in @("dxcompiler.dll", "dxil.dll") -and $_.DirectoryName -like "*x64"
-            }
-          foreach ($dll in $dlls) {
-            Copy-Item -Force -LiteralPath $dll.FullName -Destination (Join-Path dist $dll.Name)
-          }
-          # Redistributions-Lizenz (LICENSE-LLVM / LICENSE-MS / MIT-Lizenz) als
-          # DXC-LICENSE.txt. Spellings: LICENSE-MIT.txt und LICENCE-MIT.txt.
-          $licFiles = Get-ChildItem -Recurse -File -LiteralPath $x64 |
-            Where-Object { $_.Name -match "^(LICENSE|LICENCE)-(LLVM|MS|MIT)\.txt$" }
-          $licDest = "dist/DXC-LICENSE.txt"
-          Remove-Item -Force $licDest -ErrorAction SilentlyContinue
-          $licCount = 0
-          foreach ($lic in $licFiles) {
-            $licCount++
-            Add-Content -Path $licDest -Value ("=== $($lic.Name) ===`n" + (Get-Content -Raw -LiteralPath $lic.FullName))
-          }
-          if ($licCount -eq 0) {
-            Write-Error "keine Lizenzdateien in der DXC-Zip gefunden (erwartet: LICENSE-LLVM.txt, LICENSE-MS.txt, LICENSE-MIT/LICENCE-MIT.txt)"; exit 1
-          }
+      - name: Unit-Tests (Windows)
+        env:
+          RUSTFLAGS: "-C target-feature=+crt-static"
+          PE_TEST_EXE: "${{ github.workspace }}/target/x86_64-pc-windows-msvc/release/rohteil_calc.exe"
+        run: cargo test --locked --target x86_64-pc-windows-msvc --bin rohteil_calc
 
       - name: Paket schnüren
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item target/release/rohteil_calc.exe dist/Rohteilcalc.exe
+          Copy-Item target/x86_64-pc-windows-msvc/release/rohteil_calc.exe dist/Rohteilcalc.exe
           Copy-Item assets/logo.png dist/logo.png
           Copy-Item README.md dist/README.md
-          # DXC v1.9.2609: dxcompiler.dll + dxil.dll + DXC-LICENSE.txt kommen
-          # (aus den DXC-Schritten darüber) mit ins Zip – und dann auf den
-          # Zielrechner.
+          # Keine DXC-DLLs: wgpu nutzt standardmäßig FXC (in Windows enthalten).
+          # Die EXE hat statische CRT und läuft ohne Rust/VC++-Redistributable.
           Compress-Archive -Path dist/* -DestinationPath Rohteilcalc-windows-x64.zip -Force
-
-      - name: DXC-DLLs prüfen
-        shell: pwsh
-        run: |
-          $fehler = $false
-          foreach ($dll in @("dist/dxcompiler.dll", "dist/dxil.dll")) {
-            if (Test-Path $dll) {
-              Write-Output "OK: $dll  SHA256: $(Get-FileHash -Path $dll -Algorithm SHA256).Hash"
-            } else {
-              Write-Output "FEHLER: $dll fehlt"; $fehler = $true
-            }
-          }
-          if (Test-Path dist/DXC-LICENSE.txt) {
-            if ((Get-Item dist/DXC-LICENSE.txt).Length -eq 0) {
-              Write-Output "FEHLER: dist/DXC-LICENSE.txt ist leer"; $fehler = $true
-            } else {
-              Write-Output "OK: dist/DXC-LICENSE.txt  SHA256: $(Get-FileHash -Path dist/DXC-LICENSE.txt -Algorithm SHA256).Hash"
-            }
-          } else {
-            Write-Output "FEHLER: dist/DXC-LICENSE.txt fehlt"; $fehler = $true
-          }
-          if ($fehler) { exit 1 }
+          $zip = Get-Item Rohteilcalc-windows-x64.zip
+          Write-Output "ZIP: $($zip.Length) Bytes"
 
       - name: "Smoke-Test: Rohteilcalc.exe --diag"
         shell: pwsh
         run: |
           # GUI-Subsystem-Exe: PowerShell wartet nicht auf sie und setzt
-          # $LASTEXITCODE nicht – deshalb Start-Process + WaitForExit (mit
-          # Timeout) und das echte Process.ExitCode prüfen.stdout auslesen.
-          $p = Start-Process -FilePath "dist\Rohteilcalc.exe" -ArgumentList "--diag" `
-            -NoNewWindow -PassThru -RedirectStandardOutput "diag-out.txt" -RedirectStandardError "diag-err.txt"
-          if (-not $p.WaitForExit(120000)) { $p.Kill(); Write-Error "--diag Timeout (2 min)"; exit 1 }
+          # $LASTEXITCODE nicht – Start-Process + WaitForExit und echter ExitCode.
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "dist\Rohteilcalc.exe").Path
+          [void]$psi.ArgumentList.Add("--diag")
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $out = $p.StandardOutput.ReadToEndAsync()
+          $err = $p.StandardError.ReadToEndAsync()
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Error "--diag Timeout (3 min)"; exit 1 }
+          $report = $out.Result
+          Write-Output $report
+          Write-Output $err.Result
           if ($p.ExitCode -ne 0) { Write-Error "--diag beendete mit Exit-Code $($p.ExitCode)"; exit 1 }
-          Get-Content "diag-out.txt","diag-err.txt" -Raw 2>$null | Write-Output
+          foreach ($needle in @("Betriebssystem:", "Ausgewähltes Backend:", "DX12-Shader-Compiler:", "Adapter", "DLL-Abhängigkeit: kernel32.dll")) {
+            if (-not $report.Contains($needle)) { Write-Error "--diag-Bericht fehlt: $needle"; exit 1 }
+          }
+          if ($report -match "DLL-Abhängigkeit: (vcruntime|msvcp|dxcompiler|dxil)\.dll") {
+            Write-Error "EXE benötigt eine nicht mitgelieferte DLL"; exit 1
+          }
 
-      - name: "Smoke-Test: Rendering mit gebündeltem DXC"
+      - name: "Starttest: normale GUI bleibt nach dem Start lauffähig"
         shell: pwsh
-        env:
-          # Erzwingt den DXC-Pfad (dxcompiler.dll neben dem .exe); Windows-Runner
-          # bieten DX12 meist nur per WARP-Adapter an.
-          WGPU_BACKEND: "dx12"
         run: |
-          # GUI-Subsystem-Exe: PowerShell wartet nicht auf sie und setzt
-          # $LASTEXITCODE nicht – deshalb Start-Process + WaitForExit (mit
-          # Timeout) und das echte Process.ExitCode prüfen.stdout/Errors
-          # auslesen.
-          $p = Start-Process -FilePath "dist\Rohteilcalc.exe" `
-            -ArgumentList "--render examples\ci_cube.step dist\smoke.bmp" `
-            -NoNewWindow -PassThru -RedirectStandardOutput "render-out.txt" -RedirectStandardError "render-err.txt"
+          # windows-latest stellt eine interaktive Desktop-Sitzung bereit
+          # (wie SolidCrafts windows-startup-Job). Auf Systemen ohne Desktop
+          # bricht winit sofort ab – der Test erkennt das über HasExited.
+          $log = Join-Path $env:TEMP "Rohteilcalc.log"
+          Remove-Item -Force $log -ErrorAction SilentlyContinue
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "dist\Rohteilcalc.exe").Path
+          $psi.UseShellExecute = $false
+          $psi.WorkingDirectory = (Resolve-Path "dist").Path
+          $p = [System.Diagnostics.Process]::Start($psi)
+          Start-Sleep -Seconds 12
+          $p.Refresh()
+          if ($p.HasExited) {
+            Write-Error "GUI-Prozess ist während der Initialisierung beendet (Exit-Code $($p.ExitCode))"
+            exit 1
+          }
+          Write-Output "GUI-Prozess läuft nach 12 s (PID $($p.Id))"
+          $startupLog = Get-Content -Raw $log -ErrorAction SilentlyContinue
+          foreach ($needle in @("Grafik-Backend gewählt:", "CreationCallback", "Render-Pipelines installiert")) {
+            if (-not $startupLog -or -not $startupLog.Contains($needle)) {
+              Write-Error "Start-Log fehlt Phase: $needle"; $p.Kill(); exit 1
+            }
+          }
+          if ($startupLog -match "GPU-Fehler:|Pipeline-Fehler:|Panic:") {
+            Write-Error "GPU-Fehler im Start-Log"; $p.Kill(); exit 1
+          }
+          [void]$p.CloseMainWindow()
+          if (-not $p.WaitForExit(20000)) { $p.Kill(); Write-Error "GUI schloss nicht"; exit 1 }
+          Write-Output "GUI beendet mit Exit-Code $($p.ExitCode)"
+
+      - name: "Smoke-Test: Headless-Rendering (--render)"
+        shell: pwsh
+        run: |
+          # Ohne WGPU_BACKEND wählt --render auf Windows jetzt selbst DX12+FXC.
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Resolve-Path "dist\Rohteilcalc.exe").Path
+          foreach ($a in @("--render", "examples\ci_cube.step", "dist\smoke.bmp")) { [void]$psi.ArgumentList.Add($a) }
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $out = $p.StandardOutput.ReadToEndAsync()
+          $err = $p.StandardError.ReadToEndAsync()
           if (-not $p.WaitForExit(300000)) { $p.Kill(); Write-Error "--render Timeout (5 min)"; exit 1 }
+          Write-Output $out.Result
+          Write-Output $err.Result
           if ($p.ExitCode -ne 0) { Write-Error "--render beendete mit Exit-Code $($p.ExitCode)"; exit 1 }
-          Get-Content "render-out.txt","render-err.txt" -Raw 2>$null | Write-Output
           if (-not (Test-Path dist\smoke.bmp)) { Write-Error "smoke.bmp fehlt"; exit 1 }
           if ((Get-Item dist\smoke.bmp).Length -lt 100000) { Write-Error "smoke.bmp verdächtig klein"; exit 1 }
 
@@ -196,6 +200,24 @@ jobs:
             target/aarch64-apple-darwin/release/rohteil_calc \
             target/x86_64-apple-darwin/release/rohteil_calc \
             -output target/universal-apple-darwin/release/rohteil_calc
+
+      - name: "Smoke-Tests: --diag und --inspect (macOS)"
+        run: |
+          BIN=target/universal-apple-darwin/release/rohteil_calc
+          "$BIN" --diag | tee macos-diag.txt
+          grep -q "Betriebssystem:" macos-diag.txt
+          grep -q "Ausgewähltes Backend:" macos-diag.txt
+          grep -q "Adapter" macos-diag.txt
+          "$BIN" --inspect examples/ci_cube.step
+          # Headless-Rendering nur, wenn der Runner tatsächlich einen
+          # Metal-Adapter meldet (sonst nicht als Fehler werten).
+          if grep -q "Adapter 0:" macos-diag.txt; then
+            mkdir -p dist
+            "$BIN" --render examples/ci_cube.step dist/macos-smoke.bmp
+            test -s dist/macos-smoke.bmp
+          else
+            echo "Kein Metal-Adapter auf dem Runner: --render übersprungen."
+          fi
 
       - name: .app-Bundle erstellen
         run: |

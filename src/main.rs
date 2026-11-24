@@ -20,6 +20,7 @@
 mod app;
 mod camera;
 mod diag;
+mod gpu;
 mod mesh;
 #[allow(dead_code)]
 mod mesher;
@@ -42,8 +43,11 @@ use std::path::{Path, PathBuf};
 fn main() -> eframe::Result<()> {
     // Crash-sicherer Start: Start-Log beginnt (Rotation + Version, Exe,
     // Args, OS/Arch, relevante Env, DXC-DLLs, DX12-Compiler-Wahl) —
-    // Best-Effort, stürzt den Start nie ab (Fix 2).
-    diag::log_startup();
+    // Best-Effort, stürzt den Start nie ab. Ein `--diag`-Kindprozess
+    // rotiert das Log des Elternprozesses nicht.
+    if crate::gpu::diag_backend().is_none() {
+        diag::log_startup();
+    }
 
     // Mit dem Eltern-Terminal verbinden (nur Windows-Release, also ohne
     // eingebautes Konsolen-Subsystem): Der Aufrufer sieht dann die Ausgaben
@@ -139,49 +143,157 @@ fn main() -> eframe::Result<()> {
     }
 
     let initial = args.first().map(PathBuf::from);
+    let (backends, software) = gpu::startup();
+    diag::log_line(&format!(
+        "Phase: Grafik-Backend gewählt: {} ({backends:?}, software={software}, explizit={}, retry={})",
+        gpu::name(backends),
+        gpu::explicit(),
+        gpu::is_retry()
+    ));
+
+    // Der erste Versuch läuft in diesem Prozess. Jeder weitere in einem
+    // frischen Prozess: stürzt ein Grafiktreiber beim Initialisieren ab, ist
+    // das nicht abfangbar und würde auch eine Schleife im selben Prozess
+    // beenden. Genau so löst SolidCraft das Problem (SOLIDCRAFT_STARTUP_BACKEND).
+    let failure: eframe::Error = match run_window(&initial, backends, software) {
+        Ok(()) => return Ok(()),
+        Err(err) => {
+            diag::log_line(&format!(
+                "RohteilCalc konnte nicht starten auf {}: {err:?}",
+                gpu::name(backends)
+            ));
+            err
+        }
+    };
+
+    let mut current = backends;
+    while let Some((retry_name, next_backends, _software)) = gpu::fallback_after(current) {
+        diag::log_line(&format!("Phase: Rückfall {retry_name} in neuem Prozess"));
+        match relaunch(retry_name, &args) {
+            Ok(status) if status.success() => return Ok(()),
+            Ok(status) => {
+                diag::log_line(&format!("Rückfall {retry_name}: Exit-Code {status}"))
+            }
+            Err(err) => {
+                diag::log_line(&format!("Rückfall {retry_name} nicht möglich: {err}"))
+            }
+        }
+        current = next_backends;
+    }
+
+    let error = failure;
+    let message = error.to_string();
+    eprintln!("RohteilCalc konnte nicht starten: {message}");
+    diag::log_line(&format!("Vollständiger Startfehler: {error:?}"));
+    // Ein Rückfallkind berichtet nur übers Log; der Elternprozess zeigt
+    // nach der letzten versuchten API einen einzigen Fehlerdialog.
+    if !gpu::is_retry() {
+        show_startup_error(&message);
+    }
+    Err(error)
+}
+
+/// Ein Fenster mit genau einem Backend öffnen. Wird auch vom ersten
+/// Startversuch benutzt; Rückfallversuche laufen in einem eigenen Prozess.
+fn run_window(
+    initial: &Option<PathBuf>,
+    backends: eframe::wgpu::Backends,
+    software: bool,
+) -> eframe::Result<()> {
+    diag::log_line(&format!(
+        "Phase: creating eframe window (Backend {:?}, software={software})",
+        gpu::name(backends)
+    ));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 820.0])
             .with_title("RohteilCalc"),
         renderer: eframe::Renderer::Wgpu,
         multisampling: 1, // MSAA passiert im Offscreen-Ziel des Viewports
-        wgpu_options: wgpu_options(),
+        wgpu_options: wgpu_options(backends, software),
         ..Default::default()
     };
-    diag::log_line("Phase: creating eframe window");
-    let result = eframe::run_native(
+    eframe::run_native(
         "RohteilCalc",
         options,
-        Box::new(move |cc| {
-            // Adapter-Info (cc.wgpu_render_state → adapter.get_info()) und
-            // Target-Format ins Start-Log (Fix 2).
-            diag::log_creation_callback(cc);
+        Box::new(|cc| {
+            diag::log_creation_callback(cc, gpu::name(backends));
             if let Err(e) = renderer::install(cc) {
-                eprintln!("Warnung: GPU-Pipelines nicht installiert: {e}");
-                show_startup_error(&e.to_string());
+                // Ohne die SolidCraft-Pipelines geht kein Frame: Start
+                // abbrechen und der Fehler nicht still verschlucken.
+                let message = format!("GPU-Pipelines konnten nicht installiert werden: {e}");
+                diag::log_pipeline_error(&message);
+                diag::log_line(&message);
+                return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, message))
+                    as Box<dyn std::error::Error + Send + Sync>);
             }
-            Ok(Box::new(AppState::new(cc, initial)))
+            Ok(Box::new(AppState::new(cc, initial.clone())))
         }),
-    );
-    if let Err(e) = &result {
-        eprintln!("RohteilCalc konnte nicht starten: {e}");
-        show_startup_error(&e.to_string());
-    }
-    result
+    )
 }
 
-/// Einstellungen für egui-wgpu: auf Windows DXC neben dem .exe nutzen, wenn
-/// ein `dxcompiler.dll` dort liegt, sonst FXC (`solidcraft_gpu::dx12_compiler`)
-/// — nicht wgpu's `Auto`, das ein fremdes `dxcompiler.dll` aus PATH lädt und
-/// den Start bei Obsidian/NVIDIA-SDK-Manager-Ordnern kaputtgab.
-fn wgpu_options() -> egui_wgpu::WgpuConfiguration {
+/// Einen Rückfallversuch als eigenen Prozess starten und auf ihn warten.
+fn relaunch(retry_name: &str, args: &[String]) -> std::io::Result<std::process::ExitStatus> {
+    let exe = std::env::current_exe()?;
+    let mut command = std::process::Command::new(exe);
+    command.args(args).env(gpu::RETRY_ENV, retry_name);
+    command.status()
+}
+
+/// Einstellungen für egui-wgpu: genau ein Backend (nie Vulkan + DX12
+/// gleichzeitig), FXC als D3D12-Compiler (in Windows enthalten, keine DLL)
+/// und das Float-Depth-Stencil-Feature für die Render-Pipelines — dieselbe
+/// Konfiguration wie in SolidCraft rc.3.
+fn wgpu_options(
+    backends: eframe::wgpu::Backends,
+    software: bool,
+) -> egui_wgpu::WgpuConfiguration {
     let mut options = egui_wgpu::WgpuConfiguration::default();
     if let egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_setup {
+        setup.instance_descriptor.backends = backends;
         setup
             .instance_descriptor
             .backend_options
             .dx12
-            .shader_compiler = solidcraft_gpu::dx12_compiler();
+            .shader_compiler = gpu::dx12_compiler();
+        if software {
+            // WARP: zuerst die Software-Grafikkarte auswählen (SolidCrafts
+            // "cpu"-Modus). Ohne passenden Adapter bleibt es beim ersten.
+            setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, surface| {
+                adapters
+                    .iter()
+                    .find(|a| {
+                        a.get_info().device_type == wgpu::DeviceType::Cpu
+                            && surface.is_none_or(|s| a.is_surface_supported(s))
+                    })
+                    .or_else(|| {
+                        adapters
+                            .iter()
+                            .find(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
+                    })
+                    .cloned()
+                    .ok_or_else(|| "kein Adapter für Software-Rendering".to_string())
+            }));
+        }
+        // Float-Depth-Stencil-Feature (DEPTH32FLOAT_STENCIL8, reversed depth) wie
+        // in SolidCraft — sonst fehlt dem Gerät das, was das Pipeline braucht.
+        setup.device_descriptor = std::sync::Arc::new(|adapter| {
+            let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+                wgpu::Limits::downlevel_webgl2_defaults()
+            } else {
+                wgpu::Limits::default()
+            };
+            let mut device = wgpu::DeviceDescriptor {
+                label: Some("RohteilCalc wgpu device"),
+                required_limits: wgpu::Limits {
+                    max_texture_dimension_2d: 8192,
+                    ..base_limits
+                },
+                ..Default::default()
+            };
+            device.required_features |= solidcraft_gpu::depth_features(adapter);
+            device
+        });
     }
     options
 }
@@ -197,8 +309,9 @@ fn show_startup_error(message: &str) {
         .set_title("RohteilCalc konnte nicht starten")
         .set_description(format!(
             "{message}\n\nTipp: Mit der Umgebungsvariable WGPU_BACKEND=vulkan \
-             (oder gl) bzw. WGPU_DX12_COMPILER=fxc lässt sich die \
-             Grafikanbindung wechseln.\nStart-Protokoll: {}",
+             (oder gl) lässt sich die Grafikanbindung manuell wählen. Der \
+             automatische Rückfall (DX12 → Vulkan → GLES → WARP) startet \
+             bereits neu.\nStart-Protokoll: {}",
             diag::log_path().display()
         ))
         .show();
@@ -354,7 +467,7 @@ fn space_probe() {
             .with_inner_size([460.0, 340.0])
             .with_title("3D-Maus-Sonde"),
         renderer: eframe::Renderer::Wgpu,
-        wgpu_options: wgpu_options(),
+        wgpu_options: wgpu_options(gpu::startup().0, false),
         ..Default::default()
     };
     let peaks = std::sync::Arc::new(std::sync::Mutex::new([0_i16; 6]));
@@ -420,6 +533,10 @@ fn render_cli(
     zoom: f32,
     mode: ViewMode,
 ) -> Result<(), String> {
+    // solidcraft_gpu liest WGPU_BACKEND / WGPU_DX12_COMPILER beim Erstellen
+    // der Instanz. Ohne ausdrückliche Wahl auf Windows DX12 + FXC, damit
+    // kein Vulkan-Treiber und keine fremde dxcompiler.dll geladen wird.
+    gpu::set_headless_defaults();
     let session = ScSession::open(path, crate::step::Quality::High)?;
     let model = session.model(mode, false, stock::StockParams::default())?;
     let mut camera = OrbitCamera::default();

@@ -6,11 +6,22 @@ edition = "2021"
 [build-dependencies]
 winres = "0.1" # Windows-Icon aus assets/icon.ico einbetten
 
+[features]
+default = []
+# Optional: statisch eingebundenes DXC (keine dxcompiler.dll nötig). Nur
+# explizit aktivieren — der Standard ist FXC, genau wie bei SolidCraft rc.3.
+static-dxc = ["wgpu/static-dxc"]
+
 [dependencies]
 eframe = { version = "0.36", default-features = false, features = ["wgpu", "default_fonts"] }
 egui = "0.36"
 egui-wgpu = "0.36"
-wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal"] }
+# Basis ohne Backend-Features; die Plattform-Abschnitte unten ergänzen die
+# jeweiligen APIs. Zu beachten: eframe/egui-wgpu aktivieren trotzdem
+# wgpu/default, und solidcraft-gpu ergänzt metal/vulkan/dx12/gles — es werden
+# also alle nativen Backends kompiliert. Entscheidend ist die Laufzeit-Auswahl
+# in src/gpu.rs: genau ein Backend, auf Windows zuerst DX12.
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.27"
 rfd = "0.14" # Nativer Dateidialog zum Laden von STEP-Dateien
@@ -53,10 +64,21 @@ ruststep = "0.4.0"
 # Plug-and-Play-Suche der 3D-Maus-Interfaces (Configuration-Manager-APIs).
 [target.'cfg(target_os = "windows")'.dependencies]
 hidapi = { version = "2.6.7", default-features = false, features = ["windows-native"] }
+# Windows: DX12 (bevorzugt), Vulkan (alternative API), GLES (letzter
+# Software-/Kompatibilitätsfall). FXC ist in wgpu fest eingebaut und braucht
+# keine zusätzliche DLL; `static-dxc` bleibt bewusst optional.
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "gles"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Devices_HumanInterfaceDevice",
     "Win32_Devices_Properties",
     "Win32_Foundation",
     "Win32_System_Console",
+    "Win32_System_Registry",
 ] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal"] }
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "vulkan", "gles"] }

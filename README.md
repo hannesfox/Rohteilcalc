@@ -170,6 +170,7 @@ cargo build --release
 ├── src/
 │   ├── main.rs                  # Einstieg: GUI, CLI, BMP-Export
 │   ├── diag.rs                  # Start-Log, --diag-Berichte, Adapter-Proben, GPU-Fehler-Log
+│   ├── gpu.rs                   # Backend-Reihenfolge, Rückfall-Prozesse, Shader-Compiler
 │   ├── step.rs                  # STEP-Import (B-Rep bleibt erhalten) + Tessellierung
 │   ├── mesh.rs                  # Anzeigenetz, Normalen, Feature-Kanten
 │   ├── stock.rs                 # Ausrichtung und Rohteilregeln
@@ -177,6 +178,7 @@ cargo build --release
 │   ├── renderer.rs              # wgpu-Renderer (Pipelines, MSAA, Kanten, Rohteil)
 │   └── app.rs                   # egui-Oberfläche, asynchrones Laden
 ├── examples/probe.rs            # Debug: roher ruststep-Parsefehler
+├── tests/windows_smoke.ps1      # lokaler Windows-11-GUI/CLI-Smoke-Test
 └── Cargo.toml
 ```
 
@@ -196,6 +198,43 @@ cargo build --release
 - **Robustheit:** Latin-1-Fallback für ältere Exporte, Reparatur leerer
   Parameterlisten, Einheiten-Umrechnung nach mm; nicht triangulierbare Flächen
   werden als Warnung gemeldet statt still ignoriert.
+
+## Windows: Start und Grafik-Backends
+
+Die Windows-EXE ist eigenständig: sie benötigt weder Rust/Cargo noch ein
+Visual-C++-Redistributable (statische CRT) und keine zusätzlich ausgelieferten
+DLLs. Das ZIP enthält nur `Rohteilcalc.exe`, `logo.png` und `README.md`; die
+EXE kann aus jedem Verzeichnis gestartet werden.
+
+**Backends:** Wie SolidCraft startet Rohteilcalc unter Windows zuerst und
+standardmäßig **nur Direct3D 12** (auch WARP-Softwareadapter zählt). Das ist
+bewusst: wgpu/eframe würden sonst DX12, Vulkan und OpenGL gleichzeitig
+initialisieren; Intels Vulkan-Treiber (`igvk64.dll`) stürzte dadurch beim
+Start ab, bevor irgendeine Fehlermeldung möglich war. Schlägt der Start fehl,
+wird in einem **neuen Prozess** der Reihe nach Vulkan, GLES und DX12-WARP
+versucht. macOS nutzt Metal, Linux Vulkan/GLES. Alle diese APIs sind
+kompiliert (`Cargo.toml`), aber nur die gewählte wird initialisiert.
+
+**Shader-Compiler:** Standard ist FXC — in Windows/wgpu enthalten, ohne
+`dxcompiler.dll`. `wgpu` kann DXC auch statisch einbinden (Cargo-Feature
+`static-dxc`, dann ohne DLL); ein Nutzer kann mit `WGPU_DX12_COMPILER=dxc`
+jederzeit ein dynamisches DXC verlangen. `WGPU_BACKEND=dx12|vulkan|gl` wählt
+ein Backend manuell und schaltet den automatischen Rückfall ab.
+
+**Diagnose:** Bei jedem Start wird `%TEMP%\Rohteilcalc.log` geschrieben
+(altes Log → `Rohteilcalc.prev.log`). `Rohteilcalc.exe --diag` meldet OS-Version,
+EXE, Adapter mit Hersteller/Gerät, gewähltes und kompilierte Backends,
+Shader-Compiler, Geräteproben, Pipeline-Fehler und die echten DLL-Importe der
+EXE. Auf Windows fragt `--diag` jedes Backend in einem eigenen Prozess ab,
+damit ein Treiberabsturz die Diagnose nicht mitnimmt. `--render` rendert
+headless ein BMP, `--inspect` analysiert eine STEP-Datei.
+
+**Lokaler Smoke-Test:** `powershell -File tests/windows_smoke.ps1 -Exe
+<pfad>\Rohteilcalc.exe` prüft `--diag`, `--render`, den laufenden GUI-Prozess
+und das Start-Log. Der GitHub-Runner hat eine interaktive Sitzung, aber nur
+einen WARP-Softwareadapter; echte Hardware (NVIDIA/AMD/Intel) kann dort nicht
+getestet werden — dafür ist der lokale Smoke-Test auf dem Zielrechner
+maßgeblich.
 
 ## Lizenz
 
