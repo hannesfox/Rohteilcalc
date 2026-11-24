@@ -43,10 +43,13 @@ use std::path::{Path, PathBuf};
 fn main() -> eframe::Result<()> {
     // Crash-sicherer Start: Start-Log beginnt (Rotation + Version, Exe,
     // Args, OS/Arch, relevante Env, DXC-DLLs, DX12-Compiler-Wahl) —
-    // Best-Effort, stürzt den Start nie ab. Ein `--diag`-Kindprozess
-    // rotiert das Log des Elternprozesses nicht.
-    if crate::gpu::diag_backend().is_none() {
+    // Best-Effort, stürzt den Start nie ab. Rückfall- und `--diag`-
+    // Kindprozesse schreiben ohne Rotation, damit die Meldungen der
+    // vorherigen Versuche erhalten bleiben.
+    if crate::gpu::diag_backend().is_none() && !crate::gpu::is_retry() {
         diag::log_startup();
+    } else {
+        diag::log_startup_line();
     }
 
     // Mit dem Eltern-Terminal verbinden (nur Windows-Release, also ohne

@@ -58,6 +58,13 @@ pub fn rotate_log() {
 /// DXC-DLL-Präsenz und die gewählte `dx12_compiler()`-Wahl (Fix 2).
 pub fn log_startup() {
     rotate_log();
+    log_startup_line();
+}
+
+/// Dieselbe Start-Zeile **ohne** Rotation. Rückfall-Kindprozesse und
+/// `--diag`-Kinder dürfen die Meldungen der vorherigen Versuche nicht
+/// wegrotieren — sonst fehlt im Fehlerfall genau die erste Ursache.
+pub fn log_startup_line() {
     let exe = current_exe_display();
     log_line(&format!(
         "[{}] Startup: version={} exe={} args={:?} os={} os_arch={}/{} env={:?} dxc_dlls={:?} dx12_compiler={:?} compiled_backends={:?}",
